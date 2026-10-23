@@ -1,0 +1,243 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LifeDomain {
+  SALUD
+  TRABAJO
+  PERSONAL
+}
+
+enum ProjectStatus {
+  ACTIVO
+  COMPLETADO
+  ARCHIVADO
+}
+
+enum GoalStatus {
+  ACTIVO
+  ALCANZADO
+  ABANDONADO
+}
+
+enum ActionType {
+  CLAVE
+  DECISION
+}
+
+enum ActionStatus {
+  PENDIENTE
+  COMPLETADA
+  POSPUESTA
+}
+
+enum HabitFrequency {
+  DIARIA
+  SEMANAL
+}
+
+enum NoteType {
+  ACCION
+  NOTA
+  EMOCION
+}
+
+enum Feeling {
+  EXCELENTE
+  BIEN
+  NEUTRAL
+  BAJO
+  MAL
+}
+
+model User {
+  id                 String              @id @default(cuid())
+  email              String              @unique
+  name               String?
+  projects           Project[]
+  goals              Goal[]
+  actions            Action[]
+  events             CalendarEvent[]
+  habits             Habit[]
+  habitEntries       HabitEntry[]
+  dailyCheckIns      DailyCheckIn[]
+  notes              Note[]
+  monthlyReflections MonthlyReflection[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain      LifeDomain
+  title       String
+  description String?
+  status      ProjectStatus @default(ACTIVO)
+  goals       Goal[]
+  milestones  Milestone[]
+  actions     Action[]
+  events      CalendarEvent[]
+  habits      Habit[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, domain])
+}
+
+model Goal {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  targetDate  DateTime?  @db.Date
+  achievedAt  DateTime?  @db.Date
+  status      GoalStatus @default(ACTIVO)
+  milestones  Milestone[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([projectId, status])
+  @@index([userId, targetDate])
+}
+
+model Milestone {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  goalId      String?
+  goal        Goal?     @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  title       String
+  achievedAt  DateTime? @db.Date
+  targetDate  DateTime? @db.Date
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([projectId, targetDate])
+  @@index([goalId])
+}
+
+model Action {
+  id            String       @id @default(cuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId     String?
+  project       Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title         String
+  type          ActionType   @default(CLAVE)
+  status        ActionStatus @default(PENDIENTE)
+  scheduledDate DateTime     @db.Date
+  completedAt   DateTime?
+  postponedFrom DateTime?    @db.Date
+  sortOrder     Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([userId, scheduledDate, sortOrder])
+  @@index([projectId, status])
+}
+
+model CalendarEvent {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String?
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title     String
+  startsAt  DateTime
+  endsAt    DateTime
+  allDay    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId, startsAt])
+  @@index([projectId, startsAt])
+}
+
+model Habit {
+  id            String         @id @default(cuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId     String?
+  project       Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title         String
+  detail        String?
+  frequency     HabitFrequency @default(DIARIA)
+  scheduledDays Int[]          @default([])
+  active        Boolean        @default(true)
+  startedAt     DateTime       @default(now()) @db.Date
+  archivedAt    DateTime?      @db.Date
+  entries       HabitEntry[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([userId, active])
+  @@index([projectId])
+}
+
+model HabitEntry {
+  id          String   @id @default(cuid())
+  habitId     String
+  habit       Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date        DateTime @db.Date
+  completed   Boolean  @default(false)
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([habitId, date])
+  @@index([userId, date])
+}
+
+model DailyCheckIn {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       DateTime  @db.Date
+  energy     Int?
+  friction   Int?
+  motivation Int?
+  feeling    Feeling?
+  note       String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([userId, date])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  type      NoteType @default(NOTA)
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, date])
+}
+
+model MonthlyReflection {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  month     DateTime @db.Date
+  learning  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, month])
+}
