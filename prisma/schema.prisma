@@ -140,11 +140,24 @@ model Action {
   completedAt   DateTime?
   postponedFrom DateTime?    @db.Date
   sortOrder     Int          @default(0)
+  reschedules   ActionReschedule[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
   @@index([userId, scheduledDate, sortOrder])
   @@index([projectId, status])
+}
+
+model ActionReschedule {
+  id        String   @id @default(cuid())
+  actionId  String
+  action    Action   @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  fromDate  DateTime @db.Date
+  toDate    DateTime @db.Date
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([actionId, createdAt])
 }
 
 model CalendarEvent {

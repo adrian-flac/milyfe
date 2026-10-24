@@ -107,7 +107,7 @@ export async function getDashboard(date: string) {
   const [actions, monthlyActions, projects, habits, events, checkIn] = await prisma.$transaction([
     prisma.action.findMany({
       where: { userId: user.id, scheduledDate: selectedDate },
-      include: { project: { select: { id: true, title: true } } },
+      include: { project: { select: { id: true, title: true } }, reschedules: { select: { id: true } } },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       take: 6,
     }),
@@ -118,8 +118,8 @@ export async function getDashboard(date: string) {
     prisma.project.findMany({
       where: { userId: user.id, status: "ACTIVO" },
       include: {
-        goals: { where: { status: "ACTIVO" }, orderBy: { targetDate: "asc" }, take: 1 },
-        milestones: { where: { achievedAt: null }, orderBy: { targetDate: "asc" }, take: 1 },
+        goals: { orderBy: { targetDate: "asc" } },
+        milestones: { orderBy: { targetDate: "asc" } },
       },
       orderBy: { createdAt: "asc" },
     }),
@@ -149,14 +149,30 @@ export async function getDashboard(date: string) {
       status: action.status,
       projectId: action.projectId,
       project: action.project?.title ?? "Sin proyecto",
+      scheduledDate: dayKey(action.scheduledDate),
+      rescheduleCount: action.reschedules.length,
     })),
     actionDates: monthlyActions.map((action) => dayKey(action.scheduledDate)),
     projects: projects.map((project) => ({
       id: project.id,
       title: project.title,
       domain: project.domain,
-      goal: project.goals[0]?.title ?? null,
-      milestone: project.milestones[0]?.title ?? null,
+      description: project.description,
+      status: project.status,
+      goals: project.goals.map((goal) => ({
+        id: goal.id,
+        title: goal.title,
+        description: goal.description,
+        status: goal.status,
+        targetDate: goal.targetDate ? dayKey(goal.targetDate) : null,
+      })),
+      milestones: project.milestones.map((milestone) => ({
+        id: milestone.id,
+        goalId: milestone.goalId,
+        title: milestone.title,
+        targetDate: milestone.targetDate ? dayKey(milestone.targetDate) : null,
+        achievedAt: milestone.achievedAt ? dayKey(milestone.achievedAt) : null,
+      })),
     })),
     habits: habits.map((habit) => ({
       id: habit.id,

@@ -7,7 +7,8 @@ export async function GET(request: Request) {
 
   try {
     return NextResponse.json(await getDashboard(date));
-  } catch {
+  } catch (error) {
+    console.error("No se pudo cargar el panel", error);
     return NextResponse.json({ error: "No se pudo cargar el panel." }, { status: 500 });
   }
 }
