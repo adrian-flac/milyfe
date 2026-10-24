@@ -104,7 +104,7 @@ export async function getDashboard(date: string) {
   const selectedDate = dayFromKey(date);
   const { start: monthStart, end: monthEnd } = monthRange(date);
 
-  const [actions, monthlyActions, projects, habits, events, checkIn] = await prisma.$transaction([
+  const [actions, monthlyActions, projects, habits, events, checkIn, notes, monthlyNotes, monthCheckIns, reflection] = await prisma.$transaction([
     prisma.action.findMany({
       where: { userId: user.id, scheduledDate: selectedDate },
       include: { project: { select: { id: true, title: true } }, reschedules: { select: { id: true } } },
@@ -139,6 +139,20 @@ export async function getDashboard(date: string) {
       orderBy: { startsAt: "asc" },
     }),
     prisma.dailyCheckIn.findUnique({ where: { userId_date: { userId: user.id, date: selectedDate } } }),
+    prisma.note.findMany({
+      where: { userId: user.id, date: selectedDate },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.note.findMany({
+      where: { userId: user.id, date: { gte: monthStart, lt: monthEnd } },
+      select: { date: true },
+    }),
+    prisma.dailyCheckIn.aggregate({
+      where: { userId: user.id, date: { gte: monthStart, lt: monthEnd } },
+      _avg: { energy: true, friction: true, motivation: true },
+      _count: { _all: true },
+    }),
+    prisma.monthlyReflection.findUnique({ where: { userId_month: { userId: user.id, month: monthStart } } }),
   ]);
 
   return {
@@ -176,11 +190,21 @@ export async function getDashboard(date: string) {
     })),
     habits: habits.map((habit) => ({
       id: habit.id,
+      projectId: habit.projectId,
       title: habit.title,
       detail: habit.detail,
+      frequency: habit.frequency,
+      scheduledDays: habit.scheduledDays,
+      startedAt: dayKey(habit.startedAt),
       completedDates: habit.entries.map((entry) => dayKey(entry.date)),
     })),
     habitDates: habits.flatMap((habit) => habit.entries.map((entry) => dayKey(entry.date))),
+    notes: notes.map((note) => ({
+      id: note.id,
+      type: note.type,
+      content: note.content,
+    })),
+    noteDates: monthlyNotes.map((note) => dayKey(note.date)),
     events: events.map((event) => ({
       id: event.id,
       title: event.title,
@@ -188,7 +212,14 @@ export async function getDashboard(date: string) {
       project: event.project?.title ?? null,
     })),
     checkIn: checkIn
-      ? { energy: checkIn.energy, friction: checkIn.friction, motivation: checkIn.motivation, feeling: checkIn.feeling }
+      ? { energy: checkIn.energy, friction: checkIn.friction, motivation: checkIn.motivation, feeling: checkIn.feeling, note: checkIn.note }
       : null,
+    monthlyReview: {
+      checkInDays: monthCheckIns._count._all,
+      energy: monthCheckIns._avg.energy,
+      friction: monthCheckIns._avg.friction,
+      motivation: monthCheckIns._avg.motivation,
+      learning: reflection?.learning ?? null,
+    },
   };
 }

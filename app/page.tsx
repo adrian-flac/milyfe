@@ -5,21 +5,27 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 
 type ActionKind = "CLAVE" | "DECISION";
 type ActionState = "PENDIENTE" | "COMPLETADA" | "POSPUESTA";
 type Feeling = "EXCELENTE" | "BIEN" | "NEUTRAL" | "BAJO" | "MAL";
+type HabitFrequency = "DIARIA" | "SEMANAL";
+type NoteType = "ACCION" | "NOTA" | "EMOCION" | "EVENTO";
 type Action = { id: string; title: string; type: ActionKind; status: ActionState; projectId: string | null; project: string; scheduledDate: string; rescheduleCount: number };
-type Habit = { id: string; title: string; detail: string | null; completedDates: string[] };
+type Habit = { id: string; projectId: string | null; title: string; detail: string | null; frequency: HabitFrequency; scheduledDays: number[]; startedAt: string; completedDates: string[] };
+type Note = { id: string; type: NoteType; content: string };
 type Goal = { id: string; title: string; description: string | null; status: "ACTIVO" | "ALCANZADO" | "ABANDONADO"; targetDate: string | null };
 type Milestone = { id: string; goalId: string | null; title: string; targetDate: string | null; achievedAt: string | null };
 type Project = { id: string; title: string; domain: "SALUD" | "TRABAJO" | "PERSONAL"; description: string | null; status: "ACTIVO" | "COMPLETADO" | "ARCHIVADO"; goals: Goal[]; milestones: Milestone[] };
 type Dashboard = {
-  actions: Action[]; actionDates: string[]; projects: Project[]; habits: Habit[]; habitDates: string[];
+  actions: Action[]; actionDates: string[]; projects: Project[]; habits: Habit[]; habitDates: string[]; notes: Note[]; noteDates: string[];
   events: { id: string; title: string; date: string }[];
-  checkIn: { energy: number | null; friction: number | null; motivation: number | null; feeling: Feeling | null } | null;
+  checkIn: { energy: number | null; friction: number | null; motivation: number | null; feeling: Feeling | null; note: string | null } | null;
+  monthlyReview: { checkInDays: number; energy: number | null; friction: number | null; motivation: number | null; learning: string | null };
 };
 
 const months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const weekdays = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const feelings: Feeling[] = ["EXCELENTE", "BIEN", "NEUTRAL", "BAJO", "MAL"];
 const feelingLabel: Record<Feeling, string> = { EXCELENTE: "Excelente", BIEN: "Bien", NEUTRAL: "Neutral", BAJO: "Bajo", MAL: "Mal" };
+const noteLabel: Record<NoteType, string> = { ACCION: "Acción", NOTA: "Nota", EMOCION: "Emoción", EVENTO: "Evento" };
+const weekdaysShort = ["D", "L", "M", "X", "J", "V", "S"];
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><header><h2>{title}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar">×</button></header>{children}</section></div>;
@@ -43,6 +49,12 @@ function nextMondayKey(value: string) {
   const date = new Date(`${value}T12:00:00.000Z`);
   const difference = (8 - date.getUTCDay()) % 7 || 7;
   return offsetDateKey(value, difference);
+}
+
+function isHabitScheduled(habit: Habit, date: string) {
+  if (date < habit.startedAt) return false;
+  if (habit.frequency === "DIARIA") return true;
+  return habit.scheduledDays.includes(new Date(`${date}T12:00:00.000Z`).getUTCDay());
 }
 
 function domainLabel(domain: Project["domain"]) {
@@ -77,6 +89,10 @@ export default function Home() {
   const [milestoneForm, setMilestoneForm] = useState<{ id?: string; projectId: string; goalId: string; title: string; targetDate: string } | null>(null);
   const [actionForm, setActionForm] = useState<Action | null>(null);
   const [rescheduleForm, setRescheduleForm] = useState<{ action: Action; date: string; reason: string } | null>(null);
+  const [habitForm, setHabitForm] = useState<{ id?: string; title: string; detail: string; projectId: string; frequency: HabitFrequency; scheduledDays: number[] } | null>(null);
+  const [noteForm, setNoteForm] = useState<{ id?: string; type: NoteType; content: string } | null>(null);
+  const [checkInNote, setCheckInNote] = useState("");
+  const [learningDraft, setLearningDraft] = useState("");
   const selectedDate = isoDate(view.year, view.month, selectedDay);
 
   const loadDashboard = useCallback(async () => {
@@ -89,6 +105,10 @@ export default function Home() {
   }, [selectedDate]);
 
   useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  useEffect(() => {
+    setCheckInNote(dashboard?.checkIn?.note ?? "");
+    setLearningDraft(dashboard?.monthlyReview.learning ?? "");
+  }, [dashboard?.checkIn?.note, dashboard?.monthlyReview.learning, selectedDate]);
 
   const calendarCells = useMemo(() => {
     const firstWeekday = new Date(view.year, view.month, 1).getDay();
@@ -111,9 +131,11 @@ export default function Home() {
   const actions = dashboard?.actions ?? [];
   const actionDates = new Set(dashboard?.actionDates ?? []);
   const habitDates = new Set(dashboard?.habitDates ?? []);
+  const noteDates = new Set(dashboard?.noteDates ?? []);
   const pendingCount = actions.filter((action) => action.status === "PENDIENTE").length;
   const daysInMonth = new Date(view.year, view.month + 1, 0).getDate();
   const trackedDays = Math.min(selectedDay, daysInMonth);
+  const monthKey = `${view.year}-${String(view.month + 1).padStart(2, "0")}`;
 
   function changeMonth(offset: number) {
     const next = new Date(view.year, view.month + offset, 1);
@@ -278,6 +300,7 @@ export default function Home() {
 
   async function toggleHabit(habit: Habit, day: number) {
     const date = isoDate(view.year, view.month, day);
+    if (!isHabitScheduled(habit, date) || date > selectedDate) return;
     try {
       setIsSaving(true);
       await api(`/api/habits/${habit.id}`, { method: "PATCH", body: JSON.stringify({ date, completed: !habit.completedDates.includes(date) }) });
@@ -287,7 +310,56 @@ export default function Home() {
     } finally { setIsSaving(false); }
   }
 
-  async function updateCheckIn(data: Record<string, number | Feeling>) {
+  async function saveHabit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!habitForm) return;
+    try {
+      setIsSaving(true);
+      const { id, ...data } = habitForm;
+      await api(id ? `/api/habits/${id}` : "/api/habits", { method: id ? "PATCH" : "POST", body: JSON.stringify(data) });
+      setHabitForm(null);
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo guardar el hábito.");
+    } finally { setIsSaving(false); }
+  }
+
+  async function archiveHabit(habit: Habit) {
+    try {
+      setIsSaving(true);
+      await api(`/api/habits/${habit.id}`, { method: "PATCH", body: JSON.stringify({ active: false }) });
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo archivar el hábito.");
+    } finally { setIsSaving(false); }
+  }
+
+  async function saveNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!noteForm) return;
+    try {
+      setIsSaving(true);
+      const { id, ...data } = noteForm;
+      await api(id ? `/api/notes/${id}` : "/api/notes", { method: id ? "PATCH" : "POST", body: JSON.stringify(id ? data : { ...data, date: selectedDate }) });
+      setNoteForm(null);
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo guardar la nota.");
+    } finally { setIsSaving(false); }
+  }
+
+  async function saveMonthlyLearning(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setIsSaving(true);
+      await api("/api/monthly-reflection", { method: "PATCH", body: JSON.stringify({ month: monthKey, learning: learningDraft }) });
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo guardar el aprendizaje.");
+    } finally { setIsSaving(false); }
+  }
+
+  async function updateCheckIn(data: Record<string, number | Feeling | string>) {
     try {
       setIsSaving(true);
       await api("/api/check-in", { method: "PATCH", body: JSON.stringify({ date: selectedDate, ...data }) });
@@ -295,17 +367,6 @@ export default function Home() {
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : "No se pudo guardar el check-in.");
     } finally { setIsSaving(false); }
-  }
-
-  function cycleMetric(metric: "energy" | "friction" | "motivation") {
-    const current = dashboard?.checkIn?.[metric] ?? 0;
-    void updateCheckIn({ [metric]: current >= 5 ? 1 : current + 1 });
-  }
-
-  function cycleFeeling() {
-    const current = dashboard?.checkIn?.feeling;
-    const index = current ? feelings.indexOf(current) : -1;
-    void updateCheckIn({ feeling: feelings[(index + 1) % feelings.length] });
   }
 
   return <main className="app-shell">
@@ -367,17 +428,18 @@ export default function Home() {
 
       <section className="block">
         <button className="block-heading" onClick={() => setOpenBlock(openBlock === "habits" ? "actions" : "habits")}><span className="block-title"><i className="dot green" /> Bloque 3: Seguimiento de hábitos</span><span className="chevron">{openBlock === "habits" ? "⌃" : "⌄"}</span></button>
-        {openBlock === "habits" && <div className="block-content habits-content"><p className="rule">Máximo 3 activos · verde desde 70%</p>{(dashboard?.habits ?? []).map((habit) => {
-          const completed = habit.completedDates.filter((date) => Number(date.slice(-2)) <= trackedDays).length;
-          const percent = trackedDays ? Math.round((completed / trackedDays) * 100) : 0;
+        {openBlock === "habits" && <div className="block-content habits-content"><div className="habit-toolbar"><p className="rule">{(dashboard?.habits ?? []).length} de 3 activos · verde desde 70%</p><button className="text-button" onClick={() => setHabitForm({ title: "", detail: "", projectId: "", frequency: "DIARIA", scheduledDays: [0, 1, 2, 3, 4, 5, 6] })} disabled={isSaving || (dashboard?.habits ?? []).length >= 3}>+ Hábito</button></div>{(dashboard?.habits ?? []).map((habit) => {
+          const scheduledDates = Array.from({ length: trackedDays }, (_, index) => isoDate(view.year, view.month, index + 1)).filter((date) => isHabitScheduled(habit, date));
+          const completed = scheduledDates.filter((date) => habit.completedDates.includes(date)).length;
+          const percent = scheduledDates.length ? Math.round((completed / scheduledDates.length) * 100) : 0;
           const tone = percent >= 70 ? "green" : percent >= 30 ? "amber" : "red";
-          return <article className="habit" key={habit.id}><div className="habit-summary"><div><i className={`dot ${tone}`} /><strong>{habit.title}</strong><small>{habit.detail ?? "Diario"} · {completed} de {trackedDays} días</small></div><b className={`percentage ${tone}`}>{percent}%</b></div><div className="habit-days">{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const date = isoDate(view.year, view.month, day); return <button key={day} onClick={() => void toggleHabit(habit, day)} disabled={isSaving} className={habit.completedDates.includes(date) ? "done" : ""} aria-label={`${habit.title}, día ${day}`}>{day}</button>; })}</div></article>;
+          return <article className="habit" key={habit.id}><div className="habit-summary"><div><i className={`dot ${tone}`} /><strong>{habit.title}</strong><small>{habit.detail ?? (habit.frequency === "DIARIA" ? "Diario" : "Semanal")} · {completed} de {scheduledDates.length} previstos</small></div><div className="habit-actions"><b className={`percentage ${tone}`}>{percent}%</b><button className="text-button" onClick={() => setHabitForm({ id: habit.id, title: habit.title, detail: habit.detail ?? "", projectId: habit.projectId ?? "", frequency: habit.frequency, scheduledDays: habit.scheduledDays })}>Editar</button><button className="danger-link text-button" onClick={() => void archiveHabit(habit)} disabled={isSaving}>Archivar</button></div></div>{habit.frequency === "SEMANAL" && <small className="habit-frequency">{habit.scheduledDays.map((day) => weekdaysShort[day]).join(" · ")}</small>}<div className="habit-days">{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const date = isoDate(view.year, view.month, day); const scheduled = isHabitScheduled(habit, date); return <button key={day} onClick={() => void toggleHabit(habit, day)} disabled={isSaving || !scheduled || date > selectedDate} className={`${habit.completedDates.includes(date) ? "done" : ""} ${!scheduled ? "not-scheduled" : ""}`} aria-label={`${habit.title}, día ${day}`}>{day}</button>; })}</div></article>;
         })}{!dashboard && <p className="empty-state">Cargando hábitos…</p>}</div>}
       </section>
 
       <section className="block">
         <button className="block-heading" onClick={() => setOpenBlock(openBlock === "mood" ? "actions" : "mood")}><span className="block-title"><i className="dot coral" /> Bloque 4: Check-in diario</span><span className="chevron">{openBlock === "mood" ? "⌃" : "⌄"}</span></button>
-        {openBlock === "mood" && <div className="block-content mood-content"><p>Haz clic para rotar de 1 a 5 y guardar cada métrica.</p><div className="mood-grid"><button onClick={() => cycleMetric("energy")} disabled={isSaving}>⚡<small>Energía {dashboard?.checkIn?.energy ?? "—"}</small></button><button onClick={() => cycleMetric("friction")} disabled={isSaving}>◌<small>Fricción {dashboard?.checkIn?.friction ?? "—"}</small></button><button onClick={() => cycleMetric("motivation")} disabled={isSaving}>✦<small>Motivación {dashboard?.checkIn?.motivation ?? "—"}</small></button><button onClick={cycleFeeling} disabled={isSaving}>☺<small>{dashboard?.checkIn?.feeling ? feelingLabel[dashboard.checkIn.feeling] : "Sensación"}</small></button></div></div>}
+        {openBlock === "mood" && <div className="block-content mood-content"><p>Registra cómo fue el día y usa las notas para guardar lo importante.</p><div className="metric-list">{([ ["energy", "Energía", "⚡"], ["friction", "Fricción", "◌"], ["motivation", "Motivación", "✦"] ] as const).map(([metric, label, icon]) => <div className="metric-row" key={metric}><span>{icon} {label}</span><div>{[1, 2, 3, 4, 5].map((value) => <button key={value} className={dashboard?.checkIn?.[metric] === value ? "active" : ""} onClick={() => void updateCheckIn({ [metric]: value })} disabled={isSaving} aria-label={`${label}: ${value}`}>{value}</button>)}</div></div>)}</div><label className="feeling-field">Sensación<select value={dashboard?.checkIn?.feeling ?? ""} onChange={(event) => void updateCheckIn({ feeling: event.target.value as Feeling })} disabled={isSaving}><option value="" disabled>Elige una sensación</option>{feelings.map((feeling) => <option key={feeling} value={feeling}>{feelingLabel[feeling]}</option>)}</select></label><form className="checkin-note" onSubmit={(event) => { event.preventDefault(); void updateCheckIn({ note: checkInNote }); }}><label>Nota personal<textarea value={checkInNote} onChange={(event) => setCheckInNote(event.target.value)} maxLength={1000} rows={2} placeholder="¿Qué influyó en tu día?" /></label><button disabled={isSaving}>Guardar check-in</button></form><section className="daily-notes"><header><strong>Notas del día</strong><button className="text-button" onClick={() => setNoteForm({ type: "NOTA", content: "" })}>+ Nota</button></header>{(dashboard?.notes ?? []).map((note) => <article className={`daily-note ${note.type.toLowerCase()}`} key={note.id}><span>{noteLabel[note.type]}</span><p>{note.content}</p><button className="text-button" onClick={() => setNoteForm({ id: note.id, type: note.type, content: note.content })}>Editar</button></article>)}{dashboard && dashboard.notes.length === 0 && <small className="empty-inline">Sin notas para este día.</small>}</section><section className="monthly-review"><header><strong>Revisión de {months[view.month].toLowerCase()}</strong><span>{dashboard?.monthlyReview.checkInDays ?? 0} check-ins</span></header><div className="review-metrics"><span>Energía <b>{dashboard?.monthlyReview.energy?.toFixed(1) ?? "—"}</b></span><span>Fricción <b>{dashboard?.monthlyReview.friction?.toFixed(1) ?? "—"}</b></span><span>Motivación <b>{dashboard?.monthlyReview.motivation?.toFixed(1) ?? "—"}</b></span></div><form onSubmit={saveMonthlyLearning}><label>Aprendizaje del mes<textarea value={learningDraft} onChange={(event) => setLearningDraft(event.target.value)} maxLength={2000} rows={3} placeholder="Qué funcionó, qué ajustarás y qué aprendiste…" /></label><button disabled={isSaving}>Guardar aprendizaje</button></form></section></div>}
       </section>
     </aside>
 
@@ -392,7 +454,7 @@ export default function Home() {
         const selected = cell.current && cell.day === selectedDay;
         const events = cell.current ? eventsByDate.get(key) ?? [] : [];
         const weekend = index % 7 === 0 || index % 7 === 6;
-        return <button key={`${key}-${index}`} className={`calendar-cell ${!cell.current ? "outside" : ""} ${weekend ? "weekend" : ""} ${selected ? "selected" : ""}`} onClick={() => cell.current && setSelectedDay(cell.day)}><span className="date-number">{cell.day}</span>{cell.current && (habitDates.has(key) || actionDates.has(key)) && <div className="cell-status">{habitDates.has(key) && <span className="mini green" title="Hábitos cumplidos" />}{actionDates.has(key) && <span className="mini blue" title="Acciones programadas" />}</div>}<div className="events">{events.map((event) => <span key={event}>{event}</span>)}</div>{selected && <span className="cell-summary">{pendingCount} acciones · {(dashboard?.habits ?? []).length} hábitos</span>}</button>;
+        return <button key={`${key}-${index}`} className={`calendar-cell ${!cell.current ? "outside" : ""} ${weekend ? "weekend" : ""} ${selected ? "selected" : ""}`} onClick={() => cell.current && setSelectedDay(cell.day)}><span className="date-number">{cell.day}</span>{cell.current && (habitDates.has(key) || actionDates.has(key) || noteDates.has(key)) && <div className="cell-status">{habitDates.has(key) && <span className="mini green" title="Hábitos cumplidos" />}{actionDates.has(key) && <span className="mini blue" title="Acciones programadas" />}{noteDates.has(key) && <span className="mini violet" title="Notas" />}</div>}<div className="events">{events.map((event) => <span key={event}>{event}</span>)}</div>{selected && <span className="cell-summary">{pendingCount} acciones · {(dashboard?.habits ?? []).length} hábitos</span>}</button>;
       })}</div>
     </section>
 
@@ -431,6 +493,21 @@ export default function Home() {
       <label>Nueva fecha<input type="date" value={rescheduleForm.date} min={offsetDateKey(rescheduleForm.action.scheduledDate, 1)} onChange={(event) => setRescheduleForm({ ...rescheduleForm, date: event.target.value })} required /></label>
       <label>Motivo <span>(opcional)</span><input value={rescheduleForm.reason} onChange={(event) => setRescheduleForm({ ...rescheduleForm, reason: event.target.value })} maxLength={200} placeholder="Ej. prioridad inesperada" /></label>
       <footer><button type="button" className="secondary-button" onClick={() => setRescheduleForm(null)}>Cancelar</button><button disabled={isSaving}>Reprogramar</button></footer>
+    </form></Modal>}
+
+    {habitForm && <Modal title={habitForm.id ? "Editar hábito" : "Nuevo hábito"} onClose={() => setHabitForm(null)}><form className="editor-form" onSubmit={saveHabit}>
+      <label>Hábito<input value={habitForm.title} onChange={(event) => setHabitForm({ ...habitForm, title: event.target.value })} maxLength={100} autoFocus required /></label>
+      <label>Detalle <span>(opcional)</span><input value={habitForm.detail} onChange={(event) => setHabitForm({ ...habitForm, detail: event.target.value })} maxLength={200} placeholder="Ej. 20 minutos" /></label>
+      <label>Proyecto <span>(opcional)</span><select value={habitForm.projectId} onChange={(event) => setHabitForm({ ...habitForm, projectId: event.target.value })}><option value="">Sin proyecto</option>{(dashboard?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+      <label>Frecuencia<select value={habitForm.frequency} onChange={(event) => setHabitForm({ ...habitForm, frequency: event.target.value as HabitFrequency, scheduledDays: event.target.value === "DIARIA" ? [0, 1, 2, 3, 4, 5, 6] : habitForm.scheduledDays })}><option value="DIARIA">Diaria</option><option value="SEMANAL">Semanal</option></select></label>
+      {habitForm.frequency === "SEMANAL" && <fieldset className="weekday-picker"><legend>Días de la semana</legend><div>{weekdaysShort.map((day, index) => <button key={day} type="button" className={habitForm.scheduledDays.includes(index) ? "selected" : ""} onClick={() => setHabitForm({ ...habitForm, scheduledDays: habitForm.scheduledDays.includes(index) ? habitForm.scheduledDays.filter((value) => value !== index) : [...habitForm.scheduledDays, index].sort((a, b) => a - b) })}>{day}</button>)}</div></fieldset>}
+      <footer><button type="button" className="secondary-button" onClick={() => setHabitForm(null)}>Cancelar</button><button disabled={isSaving}>Guardar hábito</button></footer>
+    </form></Modal>}
+
+    {noteForm && <Modal title={noteForm.id ? "Editar nota" : "Nueva nota"} onClose={() => setNoteForm(null)}><form className="editor-form" onSubmit={saveNote}>
+      <label>Tipo<select value={noteForm.type} onChange={(event) => setNoteForm({ ...noteForm, type: event.target.value as NoteType })}><option value="ACCION">Acción a tomar</option><option value="NOTA">Nota</option><option value="EMOCION">Emoción</option><option value="EVENTO">Evento crítico</option></select></label>
+      <label>Contenido<textarea value={noteForm.content} onChange={(event) => setNoteForm({ ...noteForm, content: event.target.value })} maxLength={1000} rows={5} autoFocus required /></label>
+      <footer><button type="button" className="secondary-button" onClick={() => setNoteForm(null)}>Cancelar</button><button disabled={isSaving}>Guardar nota</button></footer>
     </form></Modal>}
   </main>;
 }

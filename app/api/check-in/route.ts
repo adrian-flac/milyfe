@@ -8,12 +8,13 @@ export async function PATCH(request: Request) {
   try {
     const body: unknown = await request.json();
     if (!body || typeof body !== "object") throw new Error("Solicitud inválida.");
-    const { date, energy, friction, motivation, feeling } = body as Record<string, unknown>;
+    const { date, energy, friction, motivation, feeling, note } = body as Record<string, unknown>;
     if (typeof date !== "string") throw new Error("Fecha inválida.");
     for (const value of [energy, friction, motivation]) {
       if (value !== undefined && (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 5)) throw new Error("Las métricas deben estar entre 1 y 5.");
     }
     if (feeling !== undefined && !feelings.includes(feeling as (typeof feelings)[number])) throw new Error("Sensación inválida.");
+    if (note !== undefined && note !== null && (typeof note !== "string" || note.length > 1000)) throw new Error("La nota no puede superar 1000 caracteres.");
 
     const user = await getLocalUser();
     const data = {
@@ -21,6 +22,7 @@ export async function PATCH(request: Request) {
       ...(friction !== undefined ? { friction: friction as number } : {}),
       ...(motivation !== undefined ? { motivation: motivation as number } : {}),
       ...(feeling !== undefined ? { feeling: feeling as (typeof feelings)[number] } : {}),
+      ...(note !== undefined ? { note: typeof note === "string" && note.trim() ? note.trim() : null } : {}),
     };
     await prisma.dailyCheckIn.upsert({
       where: { userId_date: { userId: user.id, date: dayFromKey(date) } },

@@ -45,6 +45,7 @@ enum NoteType {
   ACCION
   NOTA
   EMOCION
+  EVENTO
 }
 
 enum Feeling {
