@@ -47,6 +47,9 @@ jobs:
       - name: Validate Prisma schema
         run: pnpm exec prisma validate
 
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level=high
 
