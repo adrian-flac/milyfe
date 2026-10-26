@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse, RequestValidationError } from "../../../../lib/api-error";
 import { addUtcMonths, dayFromKey, dayKey } from "../../../../lib/dates";
 import { canUnlockHabitSlot, lastCompletedMonthStart } from "../../../../lib/habit-progress";
 import { getCurrentUser } from "../../../../lib/current-user";
@@ -8,15 +9,15 @@ const frequencies = ["DIARIA", "SEMANAL"] as const;
 
 function readHabitInput(body: Record<string, unknown>) {
   const { title, detail, projectId, frequency, scheduledDays, active } = body;
-  if (title !== undefined && (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 100)) throw new Error("El hábito debe tener entre 2 y 100 caracteres.");
-  if (detail !== undefined && detail !== null && typeof detail !== "string") throw new Error("Detalle inválido.");
-  if (projectId !== undefined && projectId !== null && typeof projectId !== "string") throw new Error("Proyecto inválido.");
-  if (frequency !== undefined && !frequencies.includes(frequency as (typeof frequencies)[number])) throw new Error("Frecuencia inválida.");
-  if (scheduledDays !== undefined && (!Array.isArray(scheduledDays) || scheduledDays.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("Días programados inválidos.");
-  if (active !== undefined && typeof active !== "boolean") throw new Error("Estado inválido.");
+  if (title !== undefined && (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 100)) throw new RequestValidationError("El hábito debe tener entre 2 y 100 caracteres.");
+  if (detail !== undefined && detail !== null && typeof detail !== "string") throw new RequestValidationError("Detalle inválido.");
+  if (projectId !== undefined && projectId !== null && typeof projectId !== "string") throw new RequestValidationError("Proyecto inválido.");
+  if (frequency !== undefined && !frequencies.includes(frequency as (typeof frequencies)[number])) throw new RequestValidationError("Frecuencia inválida.");
+  if (scheduledDays !== undefined && (!Array.isArray(scheduledDays) || scheduledDays.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new RequestValidationError("Días programados inválidos.");
+  if (active !== undefined && typeof active !== "boolean") throw new RequestValidationError("Estado inválido.");
   const resolvedFrequency = frequency as (typeof frequencies)[number] | undefined;
   const days = resolvedFrequency === "DIARIA" ? [0, 1, 2, 3, 4, 5, 6] : scheduledDays === undefined ? undefined : [...new Set(scheduledDays as number[])].sort((a, b) => a - b);
-  if (resolvedFrequency === "SEMANAL" && (!days || days.length === 0)) throw new Error("Elige al menos un día semanal.");
+  if (resolvedFrequency === "SEMANAL" && (!days || days.length === 0)) throw new RequestValidationError("Elige al menos un día semanal.");
   return { title, detail, projectId, frequency: resolvedFrequency, scheduledDays: days, active };
 }
 
@@ -28,9 +29,9 @@ async function findHabitUnlock(userId: string) {
     include: { entries: { where: { completed: true, date: { gte: addUtcMonths(currentMonth, -24) } }, select: { date: true, completed: true } } },
   });
   if (habits.length < 3) return null;
-  if (habits.length >= 4) throw new Error("Ya tienes el máximo de 4 hábitos activos.");
+  if (habits.length >= 4) throw new RequestValidationError("Ya tienes el máximo de 4 hábitos activos.");
   const habit = habits.find((item) => canUnlockHabitSlot(item, item.entries, today, item.lastUnlockedAt));
-  if (!habit) throw new Error("Completa tres meses consecutivos en verde para desbloquear un cuarto hábito.");
+  if (!habit) throw new RequestValidationError("Completa tres meses consecutivos en verde para desbloquear un cuarto hábito.");
   return { habitId: habit.id, unlockedAt: lastCompletedMonthStart(today) };
 }
 
@@ -38,7 +39,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     const { id } = await context.params;
     const body: unknown = await request.json();
-    if (!body || typeof body !== "object") throw new Error("Solicitud inválida.");
+    if (!body || typeof body !== "object") throw new RequestValidationError("Solicitud inválida.");
     const input = body as Record<string, unknown>;
 
     const user = await getCurrentUser();
@@ -47,12 +48,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
     if ("date" in input || "completed" in input) {
       const { date, completed } = input;
-      if (!habit.active) throw new Error("Reactiva el hábito antes de registrar avances.");
-      if (typeof date !== "string" || typeof completed !== "boolean") throw new Error("Datos de hábito inválidos.");
+      if (!habit.active) throw new RequestValidationError("Reactiva el hábito antes de registrar avances.");
+      if (typeof date !== "string" || typeof completed !== "boolean") throw new RequestValidationError("Datos de hábito inválidos.");
 
       const entryDate = dayFromKey(date);
-      if (entryDate < habit.startedAt) throw new Error("No puedes registrar un hábito antes de su inicio.");
-      if (habit.frequency === "SEMANAL" && !habit.scheduledDays.includes(entryDate.getUTCDay())) throw new Error("Este hábito no está programado para ese día.");
+      if (entryDate < habit.startedAt) throw new RequestValidationError("No puedes registrar un hábito antes de su inicio.");
+      if (habit.frequency === "SEMANAL" && !habit.scheduledDays.includes(entryDate.getUTCDay())) throw new RequestValidationError("Este hábito no está programado para ese día.");
       await prisma.habitEntry.upsert({
         where: { habitId_date: { habitId: habit.id, date: entryDate } },
         create: { habitId: habit.id, userId: user.id, date: entryDate, completed, completedAt: completed ? new Date() : null },
@@ -65,7 +66,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const safeProjectId = typeof meta.projectId === "string" && meta.projectId ? meta.projectId : null;
     if (meta.projectId !== undefined && safeProjectId) {
       const project = await prisma.project.findFirst({ where: { id: safeProjectId, userId: user.id, status: "ACTIVO" } });
-      if (!project) throw new Error("Proyecto inválido.");
+      if (!project) throw new RequestValidationError("Proyecto inválido.");
     }
     const unlock = meta.active && !habit.active ? await findHabitUnlock(user.id) : null;
     await prisma.habit.update({
@@ -83,6 +84,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar el hábito." }, { status: 400 });
+    return apiErrorResponse(error, "No se pudo actualizar el hábito.");
   }
 }

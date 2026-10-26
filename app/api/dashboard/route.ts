@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse } from "../../../lib/api-error";
 import { dayFromKey, getDashboard } from "../../../lib/life-data";
 
 export async function GET(request: Request) {
@@ -7,13 +8,12 @@ export async function GET(request: Request) {
   try {
     dayFromKey(date);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Fecha inválida." }, { status: 400 });
+    return apiErrorResponse(error, "Fecha inválida.");
   }
 
   try {
     return NextResponse.json(await getDashboard(date));
   } catch (error) {
-    console.error("No se pudo cargar el panel", error);
-    return NextResponse.json({ error: "No se pudo cargar el panel." }, { status: 500 });
+    return apiErrorResponse(error, "No se pudo cargar el panel.");
   }
 }

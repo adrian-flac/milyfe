@@ -108,6 +108,8 @@ export default function Home() {
   const [habitForm, setHabitForm] = useState<{ id?: string; title: string; detail: string; projectId: string; frequency: HabitFrequency; scheduledDays: number[] } | null>(null);
   const [eventForm, setEventForm] = useState<{ id: string; title: string; date: string; projectId: string } | null>(null);
   const [noteForm, setNoteForm] = useState<{ id?: string; type: NoteType; content: string } | null>(null);
+  const [passwordForm, setPasswordForm] = useState<{ currentPassword: string; newPassword: string; confirmation: string } | null>(null);
+  const [passwordError, setPasswordError] = useState("");
   const [healthDraft, setHealthDraft] = useState({ steps: "", sleepHours: "", workoutDone: false, readingPages: "" });
   const [checkInNote, setCheckInNote] = useState("");
   const [learningDraft, setLearningDraft] = useState("");
@@ -394,6 +396,27 @@ export default function Home() {
     } finally { setIsSaving(false); }
   }
 
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!passwordForm) return;
+    setPasswordError("");
+    if (passwordForm.newPassword !== passwordForm.confirmation) {
+      setPasswordError("Las contraseñas nuevas no coinciden.");
+      return;
+    }
+    try {
+      setIsSaving(true);
+      await api("/api/account/password", {
+        method: "PATCH",
+        body: JSON.stringify({ currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword }),
+      });
+      setPasswordForm(null);
+      await signOut({ callbackUrl: "/sign-in?passwordChanged=1" });
+    } catch (error) {
+      setPasswordError(error instanceof Error ? error.message : "No se pudo cambiar la contraseña.");
+    } finally { setIsSaving(false); }
+  }
+
   async function saveNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!noteForm) return;
@@ -452,7 +475,7 @@ export default function Home() {
 
   return <main className="app-shell">
     <aside className="sidebar">
-      <div className="selected-day"><p className="eyebrow">Día seleccionado</p><h1>{dateLabel(view.year, view.month, selectedDay)}</h1><span className="weather" aria-label="Nublado">☁</span><div className="account-summary"><span>{session?.user?.name ?? session?.user?.email ?? "Tu cuenta"}</span><button type="button" onClick={() => void signOut({ callbackUrl: "/sign-in" })}>Salir</button></div></div>
+      <div className="selected-day"><p className="eyebrow">Día seleccionado</p><h1>{dateLabel(view.year, view.month, selectedDay)}</h1><span className="weather" aria-label="Nublado">☁</span><div className="account-summary"><span>{session?.user?.name ?? session?.user?.email ?? "Tu cuenta"}</span><button type="button" onClick={() => { setPasswordError(""); setPasswordForm({ currentPassword: "", newPassword: "", confirmation: "" }); }}>Contraseña</button><button type="button" onClick={() => void signOut({ callbackUrl: "/sign-in" })}>Salir</button></div></div>
       {syncError && <p className="sync-error" role="alert">{syncError}</p>}
 
       <section className="block block-open">
@@ -601,6 +624,15 @@ export default function Home() {
       <label>Tipo<select value={noteForm.type} onChange={(event) => setNoteForm({ ...noteForm, type: event.target.value as NoteType })}><option value="ACCION">Acción a tomar</option><option value="NOTA">Nota</option><option value="EMOCION">Emoción</option><option value="EVENTO">Evento crítico</option></select></label>
       <label>Contenido<textarea value={noteForm.content} onChange={(event) => setNoteForm({ ...noteForm, content: event.target.value })} maxLength={1000} rows={5} autoFocus required /></label>
       <footer><button type="button" className="secondary-button" onClick={() => setNoteForm(null)}>Cancelar</button><button disabled={isSaving}>Guardar nota</button></footer>
+    </form></Modal>}
+
+    {passwordForm && <Modal title="Cambiar contraseña" onClose={() => { setPasswordForm(null); setPasswordError(""); }}><form className="editor-form" onSubmit={changePassword}>
+      <p className="modal-note">Al guardar, se cerrará la sesión en todos los dispositivos.</p>
+      <label>Contraseña actual<input type="password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} autoComplete="current-password" maxLength={128} autoFocus required /></label>
+      <label>Nueva contraseña <span>12 caracteres o más y 3 tipos: mayúsculas, minúsculas, números o símbolos.</span><input type="password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })} autoComplete="new-password" minLength={12} maxLength={128} required /></label>
+      <label>Confirmar nueva contraseña<input type="password" value={passwordForm.confirmation} onChange={(event) => setPasswordForm({ ...passwordForm, confirmation: event.target.value })} autoComplete="new-password" minLength={12} maxLength={128} required /></label>
+      {passwordError && <p className="form-error" role="alert">{passwordError}</p>}
+      <footer><button type="button" className="secondary-button" onClick={() => { setPasswordForm(null); setPasswordError(""); }}>Cancelar</button><button disabled={isSaving}>Cambiar y cerrar sesión</button></footer>
     </form></Modal>}
   </main>;
 }

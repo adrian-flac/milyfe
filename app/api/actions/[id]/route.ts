@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse, RequestValidationError } from "../../../../lib/api-error";
 import { dayFromKey, dayKey } from "../../../../lib/life-data";
 import { getCurrentUser } from "../../../../lib/current-user";
 import { prisma } from "../../../../lib/prisma";
@@ -10,13 +11,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     const { id } = await context.params;
     const body: unknown = await request.json();
-    if (!body || typeof body !== "object") throw new Error("Solicitud inválida.");
+    if (!body || typeof body !== "object") throw new RequestValidationError("Solicitud inválida.");
     const { title, type, status, projectId, date, reason } = body as Record<string, unknown>;
-    if (title !== undefined && (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 140)) throw new Error("La acción debe tener entre 2 y 140 caracteres.");
-    if (type !== undefined && !types.includes(type as (typeof types)[number])) throw new Error("Tipo de acción inválido.");
-    if (status !== undefined && !statuses.includes(status as (typeof statuses)[number])) throw new Error("Estado inválido.");
-    if (date !== undefined && typeof date !== "string") throw new Error("Fecha inválida.");
-    if (reason !== undefined && (typeof reason !== "string" || reason.length > 200)) throw new Error("El motivo no puede exceder 200 caracteres.");
+    if (title !== undefined && (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 140)) throw new RequestValidationError("La acción debe tener entre 2 y 140 caracteres.");
+    if (type !== undefined && !types.includes(type as (typeof types)[number])) throw new RequestValidationError("Tipo de acción inválido.");
+    if (status !== undefined && !statuses.includes(status as (typeof statuses)[number])) throw new RequestValidationError("Estado inválido.");
+    if (date !== undefined && typeof date !== "string") throw new RequestValidationError("Fecha inválida.");
+    if (reason !== undefined && (typeof reason !== "string" || reason.length > 200)) throw new RequestValidationError("El motivo no puede exceder 200 caracteres.");
 
     const user = await getCurrentUser();
     const action = await prisma.action.findFirst({ where: { id, userId: user.id } });
@@ -27,7 +28,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       safeProjectId = typeof projectId === "string" && projectId ? projectId : null;
       if (safeProjectId) {
         const project = await prisma.project.findFirst({ where: { id: safeProjectId, userId: user.id, status: "ACTIVO" } });
-        if (!project) throw new Error("Proyecto inválido o archivado.");
+        if (!project) throw new RequestValidationError("Proyecto inválido o archivado.");
       }
     }
 
@@ -35,7 +36,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const didReschedule = dayKey(nextDate) !== dayKey(action.scheduledDate);
     if (didReschedule) {
       const count = await prisma.action.count({ where: { userId: user.id, scheduledDate: nextDate, id: { not: id } } });
-      if (count >= 6) throw new Error("El nuevo día ya tiene seis acciones.");
+      if (count >= 6) throw new RequestValidationError("El nuevo día ya tiene seis acciones.");
     }
 
     await prisma.$transaction(async (tx) => {
@@ -58,6 +59,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar la acción." }, { status: 400 });
+    return apiErrorResponse(error, "No se pudo actualizar la acción.");
   }
 }

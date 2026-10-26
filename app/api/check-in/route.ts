@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse, RequestValidationError } from "../../../lib/api-error";
 import { dayFromKey } from "../../../lib/life-data";
 import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
@@ -8,14 +9,14 @@ const feelings = ["EXCELENTE", "BIEN", "NEUTRAL", "BAJO", "MAL"] as const;
 export async function PATCH(request: Request) {
   try {
     const body: unknown = await request.json();
-    if (!body || typeof body !== "object") throw new Error("Solicitud inválida.");
+    if (!body || typeof body !== "object") throw new RequestValidationError("Solicitud inválida.");
     const { date, energy, friction, motivation, feeling, note } = body as Record<string, unknown>;
-    if (typeof date !== "string") throw new Error("Fecha inválida.");
+    if (typeof date !== "string") throw new RequestValidationError("Fecha inválida.");
     for (const value of [energy, friction, motivation]) {
-      if (value !== undefined && (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 5)) throw new Error("Las métricas deben estar entre 1 y 5.");
+      if (value !== undefined && (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 5)) throw new RequestValidationError("Las métricas deben estar entre 1 y 5.");
     }
-    if (feeling !== undefined && !feelings.includes(feeling as (typeof feelings)[number])) throw new Error("Sensación inválida.");
-    if (note !== undefined && note !== null && (typeof note !== "string" || note.length > 1000)) throw new Error("La nota no puede superar 1000 caracteres.");
+    if (feeling !== undefined && !feelings.includes(feeling as (typeof feelings)[number])) throw new RequestValidationError("Sensación inválida.");
+    if (note !== undefined && note !== null && (typeof note !== "string" || note.length > 1000)) throw new RequestValidationError("La nota no puede superar 1000 caracteres.");
 
     const user = await getCurrentUser();
     const data = {
@@ -33,6 +34,6 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo guardar el check-in." }, { status: 400 });
+    return apiErrorResponse(error, "No se pudo guardar el check-in.");
   }
 }

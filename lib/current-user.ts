@@ -9,10 +9,12 @@ export class AuthenticationError extends Error {
 
 export async function getCurrentUser() {
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) throw new AuthenticationError();
+  const sessionUser = session?.user as { id?: string; sessionVersion?: unknown } | undefined;
+  const userId = sessionUser?.id;
+  const sessionVersion = sessionUser?.sessionVersion;
+  if (!userId || typeof sessionVersion !== "number" || !Number.isInteger(sessionVersion)) throw new AuthenticationError();
 
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw new AuthenticationError();
+  if (!user || user.sessionVersion !== sessionVersion) throw new AuthenticationError();
   return user;
 }

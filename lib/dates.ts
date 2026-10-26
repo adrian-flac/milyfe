@@ -1,13 +1,15 @@
+export class DateValidationError extends Error {}
+
 export function dayFromKey(value: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) throw new Error("La fecha debe usar el formato YYYY-MM-DD.");
+  if (!match) throw new DateValidationError("La fecha debe usar el formato YYYY-MM-DD.");
   const [, yearText, monthText, dayText] = match;
   const year = Number(yearText);
   const month = Number(monthText);
   const day = Number(dayText);
   const date = new Date(Date.UTC(year, month - 1, day, 12));
   if (month < 1 || month > 12 || day < 1 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
-    throw new Error("La fecha no es válida.");
+    throw new DateValidationError("La fecha no es válida.");
   }
   return date;
 }

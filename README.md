@@ -55,6 +55,8 @@ El proyecto está diseñado bajo una arquitectura web moderna full-stack:
 * **ORM:** Prisma para la gestión segura y tipada de modelos de datos.
 * **Autenticación:** Auth.js (NextAuth) para seguridad y privacidad de usuarios.
 
+Consulta [DEPLOYMENT.md](DEPLOYMENT.md) para activar tu cuenta, conservar tus datos locales y desplegar la aplicación.
+
 ---
 
 ## 🗄️ Esquema de Base de Datos (Prisma Model)

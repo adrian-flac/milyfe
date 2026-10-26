@@ -1,0 +1,60 @@
+name: Security and quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify application
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Prisma only validates and generates its client in CI; this URL is never used to connect.
+      DATABASE_URL: postgresql://milyfe_ci:milyfe_ci@127.0.0.1:5432/milyfe_ci
+      DIRECT_URL: postgresql://milyfe_ci:milyfe_ci@127.0.0.1:5432/milyfe_ci
+      AUTH_SECRET: ci-only-not-a-production-secret
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.0
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Prisma schema
+        run: pnpm exec prisma validate
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Type-check source
+        run: pnpm typecheck
+
+      - name: Build production bundle
+        run: pnpm build

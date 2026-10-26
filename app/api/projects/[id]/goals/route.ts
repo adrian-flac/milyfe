@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorResponse, RequestValidationError } from "../../../../../lib/api-error";
 import { dayFromKey } from "../../../../../lib/life-data";
 import { getCurrentUser } from "../../../../../lib/current-user";
 import { prisma } from "../../../../../lib/prisma";
@@ -7,11 +8,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const { id: projectId } = await context.params;
     const body: unknown = await request.json();
-    if (!body || typeof body !== "object") throw new Error("Solicitud inválida.");
+    if (!body || typeof body !== "object") throw new RequestValidationError("Solicitud inválida.");
     const { title, description, targetDate } = body as Record<string, unknown>;
-    if (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 140) throw new Error("El objetivo debe tener entre 2 y 140 caracteres.");
-    if (description !== undefined && (typeof description !== "string" || description.length > 500)) throw new Error("La descripción no puede exceder 500 caracteres.");
-    if (targetDate !== undefined && targetDate !== null && targetDate !== "" && typeof targetDate !== "string") throw new Error("Fecha inválida.");
+    if (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 140) throw new RequestValidationError("El objetivo debe tener entre 2 y 140 caracteres.");
+    if (description !== undefined && (typeof description !== "string" || description.length > 500)) throw new RequestValidationError("La descripción no puede exceder 500 caracteres.");
+    if (targetDate !== undefined && targetDate !== null && targetDate !== "" && typeof targetDate !== "string") throw new RequestValidationError("Fecha inválida.");
 
     const user = await getCurrentUser();
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id } });
@@ -21,6 +22,6 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     });
     return NextResponse.json({ goal }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear el objetivo." }, { status: 400 });
+    return apiErrorResponse(error, "No se pudo crear el objetivo.");
   }
 }

@@ -2,6 +2,10 @@ node_modules/
 .next/
 .pnpm-store/
 generated/
+.test-build/
+*.tsbuildinfo
+backups/
 .env
-.env.local
+.env.*
+!.env.example
 *.log
