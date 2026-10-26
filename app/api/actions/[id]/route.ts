@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, dayKey, getLocalUser } from "../../../../lib/life-data";
+import { dayFromKey, dayKey } from "../../../../lib/life-data";
+import { getCurrentUser } from "../../../../lib/current-user";
 import { prisma } from "../../../../lib/prisma";
 
 const statuses = ["PENDIENTE", "COMPLETADA", "POSPUESTA"] as const;
@@ -17,7 +18,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (date !== undefined && typeof date !== "string") throw new Error("Fecha inválida.");
     if (reason !== undefined && (typeof reason !== "string" || reason.length > 200)) throw new Error("El motivo no puede exceder 200 caracteres.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const action = await prisma.action.findFirst({ where: { id, userId: user.id } });
     if (!action) return NextResponse.json({ error: "Acción no encontrada." }, { status: 404 });
 

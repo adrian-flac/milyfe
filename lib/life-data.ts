@@ -1,113 +1,31 @@
 import { prisma } from "./prisma";
+import { addUtcMonths, dayFromKey, dayKey, monthRange } from "./dates";
+import { canUnlockHabitSlot } from "./habit-progress";
+import { getCurrentUser } from "./current-user";
 
-const LOCAL_USER = {
-  email: "local@milyfe.app",
-  name: "Mi Life OS",
-};
-
-export function dayFromKey(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error("La fecha debe usar el formato YYYY-MM-DD.");
-  }
-
-  return new Date(`${value}T12:00:00.000Z`);
-}
-
-export function dayKey(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
-function monthRange(value: string) {
-  const [year, month] = value.split("-").map(Number);
-  const start = new Date(Date.UTC(year, month - 1, 1, 12));
-  const end = new Date(Date.UTC(year, month, 1, 12));
-  return { start, end };
-}
-
-function addDays(value: Date, days: number) {
-  const next = new Date(value);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
-
-export async function getLocalUser() {
-  const user = await prisma.user.upsert({
-    where: { email: LOCAL_USER.email },
-    update: {},
-    create: LOCAL_USER,
-  });
-
-  const projectCount = await prisma.project.count({ where: { userId: user.id } });
-  if (projectCount > 0) return user;
-
-  const today = dayFromKey(dayKey(new Date()));
-
-  await prisma.$transaction(async (tx) => {
-    const health = await tx.project.create({
-      data: { userId: user.id, domain: "SALUD", title: "Prepararme para 10K" },
-    });
-    const work = await tx.project.create({
-      data: { userId: user.id, domain: "TRABAJO", title: "Portafolio frontend" },
-    });
-    const personal = await tx.project.create({
-      data: { userId: user.id, domain: "PERSONAL", title: "Presupuesto consciente" },
-    });
-
-    const goal = await tx.goal.create({
-      data: {
-        userId: user.id,
-        projectId: health.id,
-        title: "Correr 10 km de forma constante",
-        targetDate: addDays(today, 90),
-      },
-    });
-
-    await tx.milestone.create({
-      data: {
-        projectId: health.id,
-        goalId: goal.id,
-        title: "Correr 5 km sin parar",
-        targetDate: addDays(today, 30),
-      },
-    });
-
-    await tx.action.createMany({
-      data: [
-        { userId: user.id, projectId: work.id, title: "Finalizar módulo de React Cockpit", type: "CLAVE", status: "PENDIENTE", scheduledDate: today, sortOrder: 1 },
-        { userId: user.id, projectId: work.id, title: "Revisar pendientes con mentor", type: "DECISION", status: "PENDIENTE", scheduledDate: today, sortOrder: 2 },
-        { userId: user.id, projectId: health.id, title: "Entrenamiento de fuerza y cardio", type: "CLAVE", status: "PENDIENTE", scheduledDate: today, sortOrder: 3 },
-        { userId: user.id, projectId: personal.id, title: "Actualizar presupuesto mensual", type: "CLAVE", status: "PENDIENTE", scheduledDate: today, sortOrder: 4 },
-      ],
-    });
-
-    await tx.habit.createMany({
-      data: [
-        { userId: user.id, projectId: health.id, title: "Meditación matutina", detail: "10 minutos", scheduledDays: [0, 1, 2, 3, 4, 5, 6] },
-        { userId: user.id, projectId: personal.id, title: "Lectura", detail: "20 páginas", scheduledDays: [0, 1, 2, 3, 4, 5, 6] },
-        { userId: user.id, projectId: health.id, title: "Caminar", detail: "10,000 pasos", scheduledDays: [0, 1, 2, 3, 4, 5, 6] },
-      ],
-    });
-
-    await tx.calendarEvent.createMany({
-      data: [
-        { userId: user.id, projectId: work.id, title: "Entrega VHDL", startsAt: addDays(today, 3), endsAt: addDays(today, 3), allDay: true },
-        { userId: user.id, projectId: health.id, title: "Entrenamiento largo", startsAt: addDays(today, 5), endsAt: addDays(today, 5), allDay: true },
-      ],
-    });
-  });
-
-  return user;
-}
+export { dayFromKey, dayKey } from "./dates";
 
 export async function getDashboard(date: string) {
-  const user = await getLocalUser();
+  const user = await getCurrentUser();
   const selectedDate = dayFromKey(date);
   const { start: monthStart, end: monthEnd } = monthRange(date);
+  const today = dayFromKey(dayKey(new Date()));
+  const todayMonthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1, 12));
+  const selectedHistoryStart = addUtcMonths(monthStart, -24);
+  const currentHistoryStart = addUtcMonths(todayMonthStart, -24);
+  const historyStart = selectedHistoryStart < currentHistoryStart ? selectedHistoryStart : currentHistoryStart;
+  const entryHistoryEnd = monthEnd > addUtcMonths(todayMonthStart, 1) ? monthEnd : addUtcMonths(todayMonthStart, 1);
 
-  const [actions, monthlyActions, projects, habits, events, checkIn, notes, monthlyNotes, monthCheckIns, reflection] = await prisma.$transaction([
+  const [actions, monthlyActions, projects, habits, events, health, monthlyNotes, monthCheckIns, reflection] = await prisma.$transaction([
     prisma.action.findMany({
       where: { userId: user.id, scheduledDate: selectedDate },
-      include: { project: { select: { id: true, title: true } }, reschedules: { select: { id: true } } },
+      include: {
+        project: { select: { id: true, title: true } },
+        reschedules: {
+          select: { fromDate: true, toDate: true, reason: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+        },
+      },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       take: 6,
     }),
@@ -116,7 +34,7 @@ export async function getDashboard(date: string) {
       select: { scheduledDate: true },
     }),
     prisma.project.findMany({
-      where: { userId: user.id, status: "ACTIVO" },
+      where: { userId: user.id },
       include: {
         goals: { orderBy: { targetDate: "asc" } },
         milestones: { orderBy: { targetDate: "asc" } },
@@ -124,11 +42,11 @@ export async function getDashboard(date: string) {
       orderBy: { createdAt: "asc" },
     }),
     prisma.habit.findMany({
-      where: { userId: user.id, active: true },
+      where: { userId: user.id },
       include: {
         entries: {
-          where: { date: { gte: monthStart, lt: monthEnd }, completed: true },
-          select: { date: true },
+          where: { date: { gte: historyStart, lt: entryHistoryEnd }, completed: true },
+          select: { date: true, completed: true },
         },
       },
       orderBy: { createdAt: "asc" },
@@ -138,22 +56,59 @@ export async function getDashboard(date: string) {
       include: { project: { select: { title: true } } },
       orderBy: { startsAt: "asc" },
     }),
-    prisma.dailyCheckIn.findUnique({ where: { userId_date: { userId: user.id, date: selectedDate } } }),
+    prisma.healthMetric.findUnique({ where: { userId_date: { userId: user.id, date: selectedDate } } }),
     prisma.note.findMany({
-      where: { userId: user.id, date: selectedDate },
+      where: { userId: user.id, date: { gte: monthStart, lt: monthEnd } },
+      select: { id: true, date: true, type: true, content: true, createdAt: true },
       orderBy: { createdAt: "asc" },
     }),
-    prisma.note.findMany({
+    prisma.dailyCheckIn.findMany({
       where: { userId: user.id, date: { gte: monthStart, lt: monthEnd } },
-      select: { date: true },
-    }),
-    prisma.dailyCheckIn.aggregate({
-      where: { userId: user.id, date: { gte: monthStart, lt: monthEnd } },
-      _avg: { energy: true, friction: true, motivation: true },
-      _count: { _all: true },
+      select: { date: true, energy: true, friction: true, motivation: true, feeling: true, note: true },
     }),
     prisma.monthlyReflection.findUnique({ where: { userId_month: { userId: user.id, month: monthStart } } }),
   ]);
+
+  const selectedNotes = monthlyNotes.filter((note) => dayKey(note.date) === date);
+  const checkIn = monthCheckIns.find((item) => dayKey(item.date) === date) ?? null;
+  const average = (key: "energy" | "friction" | "motivation") => {
+    const values = monthCheckIns.map((item) => item[key]).filter((value): value is number => value !== null);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  };
+  const serializedProjects = projects.map((project) => ({
+    id: project.id,
+    title: project.title,
+    domain: project.domain,
+    description: project.description,
+    status: project.status,
+    goals: project.goals.map((goal) => ({
+      id: goal.id,
+      title: goal.title,
+      description: goal.description,
+      status: goal.status,
+      targetDate: goal.targetDate ? dayKey(goal.targetDate) : null,
+    })),
+    milestones: project.milestones.map((milestone) => ({
+      id: milestone.id,
+      goalId: milestone.goalId,
+      title: milestone.title,
+      targetDate: milestone.targetDate ? dayKey(milestone.targetDate) : null,
+      achievedAt: milestone.achievedAt ? dayKey(milestone.achievedAt) : null,
+    })),
+  }));
+  const serializedHabits = habits.map((habit) => ({
+    id: habit.id,
+    projectId: habit.projectId,
+    title: habit.title,
+    detail: habit.detail,
+    frequency: habit.frequency,
+    scheduledDays: habit.scheduledDays,
+    startedAt: dayKey(habit.startedAt),
+    completedDates: habit.entries.filter((entry) => entry.date >= monthStart).map((entry) => dayKey(entry.date)),
+  }));
+  const activeHabits = serializedHabits.filter((_, index) => habits[index].active);
+  const activeHabitRows = habits.filter((habit) => habit.active);
+  const unlockAvailable = activeHabitRows.some((habit) => canUnlockHabitSlot(habit, habit.entries, today, habit.lastUnlockedAt));
 
   return {
     actions: actions.map((action) => ({
@@ -165,41 +120,21 @@ export async function getDashboard(date: string) {
       project: action.project?.title ?? "Sin proyecto",
       scheduledDate: dayKey(action.scheduledDate),
       rescheduleCount: action.reschedules.length,
+      reschedules: action.reschedules.map((reschedule) => ({
+        fromDate: dayKey(reschedule.fromDate),
+        toDate: dayKey(reschedule.toDate),
+        reason: reschedule.reason,
+        createdAt: reschedule.createdAt.toISOString(),
+      })),
     })),
     actionDates: monthlyActions.map((action) => dayKey(action.scheduledDate)),
-    projects: projects.map((project) => ({
-      id: project.id,
-      title: project.title,
-      domain: project.domain,
-      description: project.description,
-      status: project.status,
-      goals: project.goals.map((goal) => ({
-        id: goal.id,
-        title: goal.title,
-        description: goal.description,
-        status: goal.status,
-        targetDate: goal.targetDate ? dayKey(goal.targetDate) : null,
-      })),
-      milestones: project.milestones.map((milestone) => ({
-        id: milestone.id,
-        goalId: milestone.goalId,
-        title: milestone.title,
-        targetDate: milestone.targetDate ? dayKey(milestone.targetDate) : null,
-        achievedAt: milestone.achievedAt ? dayKey(milestone.achievedAt) : null,
-      })),
-    })),
-    habits: habits.map((habit) => ({
-      id: habit.id,
-      projectId: habit.projectId,
-      title: habit.title,
-      detail: habit.detail,
-      frequency: habit.frequency,
-      scheduledDays: habit.scheduledDays,
-      startedAt: dayKey(habit.startedAt),
-      completedDates: habit.entries.map((entry) => dayKey(entry.date)),
-    })),
-    habitDates: habits.flatMap((habit) => habit.entries.map((entry) => dayKey(entry.date))),
-    notes: notes.map((note) => ({
+    projects: serializedProjects.filter((project) => project.status === "ACTIVO"),
+    archivedProjects: serializedProjects.filter((project) => project.status !== "ACTIVO"),
+    habits: activeHabits,
+    archivedHabits: serializedHabits.filter((_, index) => !habits[index].active),
+    habitCapacity: { activeCount: activeHabits.length, unlockAvailable },
+    habitDates: activeHabits.flatMap((habit) => habit.completedDates),
+    notes: selectedNotes.map((note) => ({
       id: note.id,
       type: note.type,
       content: note.content,
@@ -209,16 +144,20 @@ export async function getDashboard(date: string) {
       id: event.id,
       title: event.title,
       date: dayKey(event.startsAt),
+      projectId: event.projectId,
       project: event.project?.title ?? null,
     })),
+    health: health
+      ? { steps: health.steps, sleepHours: health.sleepHours, workoutDone: health.workoutDone, readingPages: health.readingPages }
+      : null,
     checkIn: checkIn
       ? { energy: checkIn.energy, friction: checkIn.friction, motivation: checkIn.motivation, feeling: checkIn.feeling, note: checkIn.note }
       : null,
     monthlyReview: {
-      checkInDays: monthCheckIns._count._all,
-      energy: monthCheckIns._avg.energy,
-      friction: monthCheckIns._avg.friction,
-      motivation: monthCheckIns._avg.motivation,
+      checkInDays: monthCheckIns.length,
+      energy: average("energy"),
+      friction: average("friction"),
+      motivation: average("motivation"),
       learning: reflection?.learning ?? null,
     },
   };

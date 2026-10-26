@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../lib/life-data";
+import { dayFromKey } from "../../../lib/life-data";
+import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
 
 const feelings = ["EXCELENTE", "BIEN", "NEUTRAL", "BAJO", "MAL"] as const;
@@ -16,7 +17,7 @@ export async function PATCH(request: Request) {
     if (feeling !== undefined && !feelings.includes(feeling as (typeof feelings)[number])) throw new Error("Sensación inválida.");
     if (note !== undefined && note !== null && (typeof note !== "string" || note.length > 1000)) throw new Error("La nota no puede superar 1000 caracteres.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const data = {
       ...(energy !== undefined ? { energy: energy as number } : {}),
       ...(friction !== undefined ? { friction: friction as number } : {}),

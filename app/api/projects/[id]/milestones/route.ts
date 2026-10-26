@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../../../lib/life-data";
+import { dayFromKey } from "../../../../../lib/life-data";
+import { getCurrentUser } from "../../../../../lib/current-user";
 import { prisma } from "../../../../../lib/prisma";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -11,7 +12,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 140) throw new Error("El hito debe tener entre 2 y 140 caracteres.");
     if (targetDate !== undefined && targetDate !== null && targetDate !== "" && typeof targetDate !== "string") throw new Error("Fecha inválida.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id } });
     if (!project) return NextResponse.json({ error: "Proyecto no encontrado." }, { status: 404 });
     const safeGoalId = typeof goalId === "string" && goalId ? goalId : null;

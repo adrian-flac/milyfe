@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
-import { getDashboard } from "../../../lib/life-data";
+import { dayFromKey, getDashboard } from "../../../lib/life-data";
 
 export async function GET(request: Request) {
   const date = new URL(request.url).searchParams.get("date");
   if (!date) return NextResponse.json({ error: "Falta la fecha." }, { status: 400 });
+  try {
+    dayFromKey(date);
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Fecha inválida." }, { status: 400 });
+  }
 
   try {
     return NextResponse.json(await getDashboard(date));

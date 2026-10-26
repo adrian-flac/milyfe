@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../lib/life-data";
+import { dayFromKey } from "../../../lib/life-data";
+import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
 
 export async function POST(request: Request) {
@@ -10,7 +11,7 @@ export async function POST(request: Request) {
     if (typeof title !== "string" || !title.trim() || title.trim().length > 140) throw new Error("Escribe un evento de máximo 140 caracteres.");
     if (typeof date !== "string") throw new Error("Fecha inválida.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const safeProjectId = typeof projectId === "string" && projectId ? projectId : null;
     if (safeProjectId) {
       const project = await prisma.project.findFirst({ where: { id: safeProjectId, userId: user.id } });

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLocalUser } from "../../../../lib/life-data";
+import { getCurrentUser } from "../../../../lib/current-user";
 import { prisma } from "../../../../lib/prisma";
 
 const noteTypes = ["ACCION", "NOTA", "EMOCION", "EVENTO"] as const;
@@ -12,7 +12,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const { type, content } = body as Record<string, unknown>;
     if (type !== undefined && !noteTypes.includes(type as (typeof noteTypes)[number])) throw new Error("Tipo de nota inválido.");
     if (content !== undefined && (typeof content !== "string" || content.trim().length < 1 || content.trim().length > 1000)) throw new Error("La nota debe tener entre 1 y 1000 caracteres.");
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const note = await prisma.note.findFirst({ where: { id, userId: user.id } });
     if (!note) return NextResponse.json({ error: "Nota no encontrada." }, { status: 404 });
     await prisma.note.update({ where: { id }, data: { ...(type !== undefined ? { type: type as (typeof noteTypes)[number] } : {}), ...(typeof content === "string" ? { content: content.trim() } : {}) } });

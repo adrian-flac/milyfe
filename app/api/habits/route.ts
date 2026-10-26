@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { getLocalUser } from "../../../lib/life-data";
+import { addUtcMonths, dayFromKey, dayKey } from "../../../lib/dates";
+import { canUnlockHabitSlot, lastCompletedMonthStart } from "../../../lib/habit-progress";
+import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
 
 const frequencies = ["DIARIA", "SEMANAL"] as const;
@@ -16,19 +18,33 @@ function readHabitInput(body: Record<string, unknown>) {
   return { title: title.trim(), detail: typeof detail === "string" && detail.trim() ? detail.trim() : null, projectId: typeof projectId === "string" && projectId ? projectId : null, frequency: frequency as (typeof frequencies)[number], scheduledDays: days };
 }
 
+async function findHabitUnlock(userId: string) {
+  const today = dayFromKey(dayKey(new Date()));
+  const currentMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1, 12));
+  const habits = await prisma.habit.findMany({
+    where: { userId, active: true },
+    include: { entries: { where: { completed: true, date: { gte: addUtcMonths(currentMonth, -24) } }, select: { date: true, completed: true } } },
+  });
+  if (habits.length < 3) return null;
+  if (habits.length >= 4) throw new Error("Ya tienes el máximo de 4 hábitos activos.");
+  const habit = habits.find((item) => canUnlockHabitSlot(item, item.entries, today, item.lastUnlockedAt));
+  if (!habit) throw new Error("Completa tres meses consecutivos en verde para desbloquear un cuarto hábito.");
+  return { habitId: habit.id, unlockedAt: lastCompletedMonthStart(today) };
+}
+
 export async function POST(request: Request) {
   try {
     const body: unknown = await request.json();
     if (!body || typeof body !== "object") throw new Error("Solicitud inválida.");
     const input = readHabitInput(body as Record<string, unknown>);
-    const user = await getLocalUser();
-    const activeCount = await prisma.habit.count({ where: { userId: user.id, active: true } });
-    if (activeCount >= 3) throw new Error("Puedes mantener hasta 3 hábitos activos. Archiva uno antes de añadir otro.");
+    const user = await getCurrentUser();
+    const unlock = await findHabitUnlock(user.id);
     if (input.projectId) {
       const project = await prisma.project.findFirst({ where: { id: input.projectId, userId: user.id, status: "ACTIVO" } });
       if (!project) throw new Error("Proyecto inválido.");
     }
     const habit = await prisma.habit.create({ data: { userId: user.id, ...input } });
+    if (unlock) await prisma.habit.update({ where: { id: unlock.habitId }, data: { lastUnlockedAt: unlock.unlockedAt } });
     return NextResponse.json({ habit }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear el hábito." }, { status: 400 });

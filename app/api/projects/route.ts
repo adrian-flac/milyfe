@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLocalUser } from "../../../lib/life-data";
+import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
 
 const domains = ["SALUD", "TRABAJO", "PERSONAL"] as const;
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     if (!domains.includes(domain as (typeof domains)[number])) throw new Error("Dominio inválido.");
     if (description !== undefined && (typeof description !== "string" || description.length > 500)) throw new Error("La descripción no puede exceder 500 caracteres.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const project = await prisma.project.create({
       data: { userId: user.id, title: title.trim(), domain: domain as (typeof domains)[number], description: typeof description === "string" ? description.trim() || null : null },
     });

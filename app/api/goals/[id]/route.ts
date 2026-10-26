@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../../lib/life-data";
+import { dayFromKey } from "../../../../lib/life-data";
+import { getCurrentUser } from "../../../../lib/current-user";
 import { prisma } from "../../../../lib/prisma";
 
 const statuses = ["ACTIVO", "ALCANZADO", "ABANDONADO"] as const;
@@ -15,7 +16,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (targetDate !== undefined && targetDate !== null && targetDate !== "" && typeof targetDate !== "string") throw new Error("Fecha inválida.");
     if (status !== undefined && !statuses.includes(status as (typeof statuses)[number])) throw new Error("Estado inválido.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const goal = await prisma.goal.findFirst({ where: { id, userId: user.id } });
     if (!goal) return NextResponse.json({ error: "Objetivo no encontrado." }, { status: 404 });
     const safeStatus = status as (typeof statuses)[number] | undefined;

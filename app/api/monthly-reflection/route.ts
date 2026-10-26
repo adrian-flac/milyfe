@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../lib/life-data";
+import { dayFromKey } from "../../../lib/life-data";
+import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
 
 export async function PATCH(request: Request) {
@@ -9,7 +10,7 @@ export async function PATCH(request: Request) {
     const { month, learning } = body as Record<string, unknown>;
     if (typeof month !== "string" || !/^\d{4}-\d{2}$/.test(month)) throw new Error("Mes inválido.");
     if (learning !== undefined && learning !== null && (typeof learning !== "string" || learning.length > 2000)) throw new Error("El aprendizaje no puede superar 2000 caracteres.");
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const date = dayFromKey(`${month}-01`);
     await prisma.monthlyReflection.upsert({
       where: { userId_month: { userId: user.id, month: date } },

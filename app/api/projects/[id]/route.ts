@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLocalUser } from "../../../../lib/life-data";
+import { getCurrentUser } from "../../../../lib/current-user";
 import { prisma } from "../../../../lib/prisma";
 
 const domains = ["SALUD", "TRABAJO", "PERSONAL"] as const;
@@ -16,7 +16,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (description !== undefined && (typeof description !== "string" || description.length > 500)) throw new Error("La descripción no puede exceder 500 caracteres.");
     if (status !== undefined && !statuses.includes(status as (typeof statuses)[number])) throw new Error("Estado inválido.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const project = await prisma.project.findFirst({ where: { id, userId: user.id } });
     if (!project) return NextResponse.json({ error: "Proyecto no encontrado." }, { status: 404 });
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../lib/life-data";
+import { dayFromKey } from "../../../lib/life-data";
+import { getCurrentUser } from "../../../lib/current-user";
 import { prisma } from "../../../lib/prisma";
 
 const actionTypes = ["CLAVE", "DECISION"] as const;
@@ -14,7 +15,7 @@ export async function POST(request: Request) {
     if (typeof date !== "string") throw new Error("Fecha inválida.");
     if (!actionTypes.includes(type as (typeof actionTypes)[number])) throw new Error("Tipo de acción inválido.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const scheduledDate = dayFromKey(date);
     const existing = await prisma.action.count({ where: { userId: user.id, scheduledDate } });
     if (existing >= 6) throw new Error("Solo puedes tener seis acciones para este día.");

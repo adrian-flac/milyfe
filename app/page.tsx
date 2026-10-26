@@ -1,13 +1,15 @@
 "use client";
 
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { signOut, useSession } from "next-auth/react";
 
 type ActionKind = "CLAVE" | "DECISION";
 type ActionState = "PENDIENTE" | "COMPLETADA" | "POSPUESTA";
 type Feeling = "EXCELENTE" | "BIEN" | "NEUTRAL" | "BAJO" | "MAL";
 type HabitFrequency = "DIARIA" | "SEMANAL";
 type NoteType = "ACCION" | "NOTA" | "EMOCION" | "EVENTO";
-type Action = { id: string; title: string; type: ActionKind; status: ActionState; projectId: string | null; project: string; scheduledDate: string; rescheduleCount: number };
+type Reschedule = { fromDate: string; toDate: string; reason: string | null; createdAt: string };
+type Action = { id: string; title: string; type: ActionKind; status: ActionState; projectId: string | null; project: string; scheduledDate: string; rescheduleCount: number; reschedules: Reschedule[] };
 type Habit = { id: string; projectId: string | null; title: string; detail: string | null; frequency: HabitFrequency; scheduledDays: number[]; startedAt: string; completedDates: string[] };
 type Note = { id: string; type: NoteType; content: string };
 type Goal = { id: string; title: string; description: string | null; status: "ACTIVO" | "ALCANZADO" | "ABANDONADO"; targetDate: string | null };
@@ -15,7 +17,9 @@ type Milestone = { id: string; goalId: string | null; title: string; targetDate:
 type Project = { id: string; title: string; domain: "SALUD" | "TRABAJO" | "PERSONAL"; description: string | null; status: "ACTIVO" | "COMPLETADO" | "ARCHIVADO"; goals: Goal[]; milestones: Milestone[] };
 type Dashboard = {
   actions: Action[]; actionDates: string[]; projects: Project[]; habits: Habit[]; habitDates: string[]; notes: Note[]; noteDates: string[];
-  events: { id: string; title: string; date: string }[];
+  archivedProjects: Project[]; archivedHabits: Habit[]; habitCapacity: { activeCount: number; unlockAvailable: boolean };
+  events: { id: string; title: string; date: string; projectId: string | null; project: string | null }[];
+  health: { steps: number | null; sleepHours: number | null; workoutDone: boolean; readingPages: number | null } | null;
   checkIn: { energy: number | null; friction: number | null; motivation: number | null; feeling: Feeling | null; note: string | null } | null;
   monthlyReview: { checkInDays: number; energy: number | null; friction: number | null; motivation: number | null; learning: string | null };
 };
@@ -28,7 +32,17 @@ const noteLabel: Record<NoteType, string> = { ACCION: "Acción", NOTA: "Nota", E
 const weekdaysShort = ["D", "L", "M", "X", "J", "V", "S"];
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><header><h2>{title}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar">×</button></header>{children}</section></div>;
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    closeButton.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseRef.current(); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => { document.removeEventListener("keydown", closeOnEscape); previouslyFocused?.focus(); };
+  }, []);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}><header><h2 id="modal-title">{title}</h2><button ref={closeButton} type="button" className="icon-button" onClick={onClose} aria-label="Cerrar">×</button></header>{children}</section></div>;
 }
 
 function isoDate(year: number, month: number, day: number) {
@@ -71,6 +85,7 @@ async function api(path: string, options?: RequestInit) {
 }
 
 export default function Home() {
+  const { data: session } = useSession();
   const initialToday = new Date();
   const [view, setView] = useState(() => ({ year: initialToday.getFullYear(), month: initialToday.getMonth() }));
   const [selectedDay, setSelectedDay] = useState(() => initialToday.getDate());
@@ -89,8 +104,11 @@ export default function Home() {
   const [milestoneForm, setMilestoneForm] = useState<{ id?: string; projectId: string; goalId: string; title: string; targetDate: string } | null>(null);
   const [actionForm, setActionForm] = useState<Action | null>(null);
   const [rescheduleForm, setRescheduleForm] = useState<{ action: Action; date: string; reason: string } | null>(null);
+  const [historyAction, setHistoryAction] = useState<Action | null>(null);
   const [habitForm, setHabitForm] = useState<{ id?: string; title: string; detail: string; projectId: string; frequency: HabitFrequency; scheduledDays: number[] } | null>(null);
+  const [eventForm, setEventForm] = useState<{ id: string; title: string; date: string; projectId: string } | null>(null);
   const [noteForm, setNoteForm] = useState<{ id?: string; type: NoteType; content: string } | null>(null);
+  const [healthDraft, setHealthDraft] = useState({ steps: "", sleepHours: "", workoutDone: false, readingPages: "" });
   const [checkInNote, setCheckInNote] = useState("");
   const [learningDraft, setLearningDraft] = useState("");
   const selectedDate = isoDate(view.year, view.month, selectedDay);
@@ -108,7 +126,13 @@ export default function Home() {
   useEffect(() => {
     setCheckInNote(dashboard?.checkIn?.note ?? "");
     setLearningDraft(dashboard?.monthlyReview.learning ?? "");
-  }, [dashboard?.checkIn?.note, dashboard?.monthlyReview.learning, selectedDate]);
+    setHealthDraft({
+      steps: dashboard?.health?.steps?.toString() ?? "",
+      sleepHours: dashboard?.health?.sleepHours?.toString() ?? "",
+      workoutDone: dashboard?.health?.workoutDone ?? false,
+      readingPages: dashboard?.health?.readingPages?.toString() ?? "",
+    });
+  }, [dashboard?.checkIn?.note, dashboard?.monthlyReview.learning, dashboard?.health?.steps, dashboard?.health?.sleepHours, dashboard?.health?.workoutDone, dashboard?.health?.readingPages, selectedDate]);
 
   const calendarCells = useMemo(() => {
     const firstWeekday = new Date(view.year, view.month, 1).getDay();
@@ -123,8 +147,8 @@ export default function Home() {
   }, [view]);
 
   const eventsByDate = useMemo(() => {
-    const byDate = new Map<string, string[]>();
-    for (const event of dashboard?.events ?? []) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event.title]);
+    const byDate = new Map<string, Dashboard["events"]>();
+    for (const event of dashboard?.events ?? []) byDate.set(event.date, [...(byDate.get(event.date) ?? []), event]);
     return byDate;
   }, [dashboard]);
 
@@ -136,6 +160,7 @@ export default function Home() {
   const daysInMonth = new Date(view.year, view.month + 1, 0).getDate();
   const trackedDays = Math.min(selectedDay, daysInMonth);
   const monthKey = `${view.year}-${String(view.month + 1).padStart(2, "0")}`;
+  const selectedEvents = (dashboard?.events ?? []).filter((event) => event.date === selectedDate);
 
   function changeMonth(offset: number) {
     const next = new Date(view.year, view.month + offset, 1);
@@ -172,14 +197,14 @@ export default function Home() {
     } finally { setIsSaving(false); }
   }
 
-  async function archiveProject(project: Project) {
+  async function setProjectStatus(project: Project, status: Project["status"]) {
     try {
       setIsSaving(true);
-      await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ status: "ARCHIVADO" }) });
+      await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
       if (expandedProjectId === project.id) setExpandedProjectId(null);
       await loadDashboard();
     } catch (error) {
-      setSyncError(error instanceof Error ? error.message : "No se pudo archivar el proyecto.");
+      setSyncError(error instanceof Error ? error.message : "No se pudo actualizar el proyecto.");
     } finally { setIsSaving(false); }
   }
 
@@ -298,6 +323,31 @@ export default function Home() {
     } finally { setIsSaving(false); }
   }
 
+  async function saveEventDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!eventForm) return;
+    try {
+      setIsSaving(true);
+      await api(`/api/events/${eventForm.id}`, { method: "PATCH", body: JSON.stringify({ title: eventForm.title, date: eventForm.date, projectId: eventForm.projectId || null }) });
+      setEventForm(null);
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo actualizar el evento.");
+    } finally { setIsSaving(false); }
+  }
+
+  async function deleteEvent() {
+    if (!eventForm || !window.confirm(`¿Eliminar el evento “${eventForm.title}”?`)) return;
+    try {
+      setIsSaving(true);
+      await api(`/api/events/${eventForm.id}`, { method: "DELETE" });
+      setEventForm(null);
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo eliminar el evento.");
+    } finally { setIsSaving(false); }
+  }
+
   async function toggleHabit(habit: Habit, day: number) {
     const date = isoDate(view.year, view.month, day);
     if (!isHabitScheduled(habit, date) || date > selectedDate) return;
@@ -331,6 +381,16 @@ export default function Home() {
       await loadDashboard();
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : "No se pudo archivar el hábito.");
+    } finally { setIsSaving(false); }
+  }
+
+  async function restoreHabit(habit: Habit) {
+    try {
+      setIsSaving(true);
+      await api(`/api/habits/${habit.id}`, { method: "PATCH", body: JSON.stringify({ active: true }) });
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudo reactivar el hábito.");
     } finally { setIsSaving(false); }
   }
 
@@ -369,9 +429,30 @@ export default function Home() {
     } finally { setIsSaving(false); }
   }
 
+  async function saveHealth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setIsSaving(true);
+      const numberOrNull = (value: string) => value.trim() ? Number(value) : null;
+      await api("/api/health", {
+        method: "PATCH",
+        body: JSON.stringify({
+          date: selectedDate,
+          steps: numberOrNull(healthDraft.steps),
+          sleepHours: numberOrNull(healthDraft.sleepHours),
+          workoutDone: healthDraft.workoutDone,
+          readingPages: numberOrNull(healthDraft.readingPages),
+        }),
+      });
+      await loadDashboard();
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "No se pudieron guardar las métricas de salud.");
+    } finally { setIsSaving(false); }
+  }
+
   return <main className="app-shell">
     <aside className="sidebar">
-      <div className="selected-day"><p className="eyebrow">Día seleccionado</p><h1>{dateLabel(view.year, view.month, selectedDay)}</h1><span className="weather" aria-label="Nublado">☁</span></div>
+      <div className="selected-day"><p className="eyebrow">Día seleccionado</p><h1>{dateLabel(view.year, view.month, selectedDay)}</h1><span className="weather" aria-label="Nublado">☁</span><div className="account-summary"><span>{session?.user?.name ?? session?.user?.email ?? "Tu cuenta"}</span><button type="button" onClick={() => void signOut({ callbackUrl: "/sign-in" })}>Salir</button></div></div>
       {syncError && <p className="sync-error" role="alert">{syncError}</p>}
 
       <section className="block block-open">
@@ -393,6 +474,7 @@ export default function Home() {
               <button className="row-tool" onClick={() => void moveAction(action.id, 1)} disabled={isSaving || index === actions.length - 1} title="Bajar acción" aria-label={`Bajar ${action.title}`}>↓</button>
               <button className="row-tool" onClick={() => setActionForm(action)} disabled={isSaving} title="Editar acción" aria-label={`Editar ${action.title}`}>✎</button>
               <button className="row-tool" onClick={() => setRescheduleForm({ action, date: offsetDateKey(action.scheduledDate, 1), reason: "" })} disabled={isSaving} title="Reprogramar acción" aria-label={`Reprogramar ${action.title}`}>↪</button>
+               {action.rescheduleCount > 0 && <button className="row-tool" onClick={() => setHistoryAction(action)} disabled={isSaving} title="Ver historial" aria-label={`Ver historial de ${action.title}`}>◷</button>}
             </div>
           </article>)}{!dashboard && <p className="empty-state">Cargando acciones…</p>}{dashboard && actions.length === 0 && <p className="empty-state">No hay acciones para este día.</p>}</div>
         </div>}
@@ -410,7 +492,7 @@ export default function Home() {
               <button className="project-summary" onClick={() => setExpandedProjectId(isExpanded ? null : project.id)}><span className={`domain ${project.domain.toLowerCase()}`}>{domainLabel(project.domain)}</span><strong>{project.title}</strong><small>{pendingMilestone ? `Próximo hito: ${pendingMilestone.title}` : activeGoal ? `Objetivo: ${activeGoal.title}` : "Sin objetivo activo"}</small><b>{isExpanded ? "⌃" : "⌄"}</b></button>
               {isExpanded && <div className="project-detail">
                 {project.description && <p>{project.description}</p>}
-                <div className="project-actions"><button onClick={() => setProjectForm({ id: project.id, title: project.title, domain: project.domain, description: project.description ?? "" })}>Editar</button><button className="danger-link" onClick={() => void archiveProject(project)} disabled={isSaving}>Archivar</button></div>
+                <div className="project-actions"><button onClick={() => setProjectForm({ id: project.id, title: project.title, domain: project.domain, description: project.description ?? "" })}>Editar</button><button onClick={() => void setProjectStatus(project, "COMPLETADO")} disabled={isSaving}>Completar</button><button className="danger-link" onClick={() => void setProjectStatus(project, "ARCHIVADO")} disabled={isSaving}>Archivar</button></div>
                 <section className="project-section"><header><strong>Objetivos</strong><button onClick={() => setGoalForm({ projectId: project.id, title: "", description: "", targetDate: "" })}>+ Objetivo</button></header>
                   {project.goals.map((goal) => <div className={`record-row ${goal.status === "ALCANZADO" ? "done" : ""}`} key={goal.id}><button className="mini-check" onClick={() => void toggleGoal(goal)} disabled={isSaving}>{goal.status === "ALCANZADO" ? "✓" : ""}</button><span><b>{goal.title}</b><small>{goal.targetDate ? `Meta: ${goal.targetDate}` : "Sin fecha"}</small></span><button className="text-button" onClick={() => setGoalForm({ id: goal.id, projectId: project.id, title: goal.title, description: goal.description ?? "", targetDate: goal.targetDate ?? "" })}>Editar</button></div>)}
                   {!project.goals.length && <small className="empty-inline">Todavía no hay objetivos.</small>}
@@ -422,19 +504,20 @@ export default function Home() {
               </div>}
             </article>;
           })}
+           {!!dashboard?.archivedProjects.length && <details className="archive-list"><summary>Historial de proyectos ({dashboard.archivedProjects.length})</summary>{dashboard.archivedProjects.map((project) => <div key={project.id}><span><b>{project.title}</b><small>{project.status === "COMPLETADO" ? "Completado" : "Archivado"}</small></span><button className="text-button" onClick={() => void setProjectStatus(project, "ACTIVO")} disabled={isSaving}>Reactivar</button></div>)}</details>}
           {!dashboard && <p className="empty-state">Cargando proyectos…</p>}
         </div>}
       </section>
 
       <section className="block">
         <button className="block-heading" onClick={() => setOpenBlock(openBlock === "habits" ? "actions" : "habits")}><span className="block-title"><i className="dot green" /> Bloque 3: Seguimiento de hábitos</span><span className="chevron">{openBlock === "habits" ? "⌃" : "⌄"}</span></button>
-        {openBlock === "habits" && <div className="block-content habits-content"><div className="habit-toolbar"><p className="rule">{(dashboard?.habits ?? []).length} de 3 activos · verde desde 70%</p><button className="text-button" onClick={() => setHabitForm({ title: "", detail: "", projectId: "", frequency: "DIARIA", scheduledDays: [0, 1, 2, 3, 4, 5, 6] })} disabled={isSaving || (dashboard?.habits ?? []).length >= 3}>+ Hábito</button></div>{(dashboard?.habits ?? []).map((habit) => {
+        {openBlock === "habits" && <div className="block-content habits-content"><form className="health-metrics" onSubmit={saveHealth}><header><strong>Salud del día</strong><span>Registra lo medible</span></header><div><label>Pasos<input type="number" min="0" max="100000" inputMode="numeric" value={healthDraft.steps} onChange={(event) => setHealthDraft({ ...healthDraft, steps: event.target.value })} placeholder="0" /></label><label>Sueño (h)<input type="number" min="0" max="24" step="0.1" inputMode="decimal" value={healthDraft.sleepHours} onChange={(event) => setHealthDraft({ ...healthDraft, sleepHours: event.target.value })} placeholder="0" /></label><label>Lectura (pág.)<input type="number" min="0" max="10000" inputMode="numeric" value={healthDraft.readingPages} onChange={(event) => setHealthDraft({ ...healthDraft, readingPages: event.target.value })} placeholder="0" /></label><label className="workout-toggle"><input type="checkbox" checked={healthDraft.workoutDone} onChange={(event) => setHealthDraft({ ...healthDraft, workoutDone: event.target.checked })} /> Entrenamiento</label></div><button disabled={isSaving}>Guardar salud</button></form><div className="habit-toolbar"><p className="rule">{dashboard?.habitCapacity.activeCount ?? 0} de {dashboard?.habitCapacity.activeCount && dashboard.habitCapacity.activeCount >= 4 ? 4 : 3} activos · verde desde 70%</p><button className="text-button" onClick={() => setHabitForm({ title: "", detail: "", projectId: "", frequency: "DIARIA", scheduledDays: [0, 1, 2, 3, 4, 5, 6] })} disabled={isSaving || (dashboard?.habitCapacity.activeCount ?? 0) >= 4 || ((dashboard?.habitCapacity.activeCount ?? 0) === 3 && !dashboard?.habitCapacity.unlockAvailable)}>+ Hábito</button></div>{(dashboard?.habitCapacity.activeCount ?? 0) === 3 && <p className="habit-unlock">{dashboard?.habitCapacity.unlockAvailable ? "Cupo desbloqueado: una racha de 3 meses en verde permite un cuarto hábito." : "Mantén 3 meses consecutivos en verde para desbloquear un cuarto hábito."}</p>}{(dashboard?.habits ?? []).map((habit) => {
           const scheduledDates = Array.from({ length: trackedDays }, (_, index) => isoDate(view.year, view.month, index + 1)).filter((date) => isHabitScheduled(habit, date));
           const completed = scheduledDates.filter((date) => habit.completedDates.includes(date)).length;
           const percent = scheduledDates.length ? Math.round((completed / scheduledDates.length) * 100) : 0;
           const tone = percent >= 70 ? "green" : percent >= 30 ? "amber" : "red";
-          return <article className="habit" key={habit.id}><div className="habit-summary"><div><i className={`dot ${tone}`} /><strong>{habit.title}</strong><small>{habit.detail ?? (habit.frequency === "DIARIA" ? "Diario" : "Semanal")} · {completed} de {scheduledDates.length} previstos</small></div><div className="habit-actions"><b className={`percentage ${tone}`}>{percent}%</b><button className="text-button" onClick={() => setHabitForm({ id: habit.id, title: habit.title, detail: habit.detail ?? "", projectId: habit.projectId ?? "", frequency: habit.frequency, scheduledDays: habit.scheduledDays })}>Editar</button><button className="danger-link text-button" onClick={() => void archiveHabit(habit)} disabled={isSaving}>Archivar</button></div></div>{habit.frequency === "SEMANAL" && <small className="habit-frequency">{habit.scheduledDays.map((day) => weekdaysShort[day]).join(" · ")}</small>}<div className="habit-days">{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const date = isoDate(view.year, view.month, day); const scheduled = isHabitScheduled(habit, date); return <button key={day} onClick={() => void toggleHabit(habit, day)} disabled={isSaving || !scheduled || date > selectedDate} className={`${habit.completedDates.includes(date) ? "done" : ""} ${!scheduled ? "not-scheduled" : ""}`} aria-label={`${habit.title}, día ${day}`}>{day}</button>; })}</div></article>;
-        })}{!dashboard && <p className="empty-state">Cargando hábitos…</p>}</div>}
+          return <article className="habit" key={habit.id}><div className="habit-summary"><div><i className={`dot ${tone}`} /><strong>{habit.title}</strong><small>{habit.detail ?? (habit.frequency === "DIARIA" ? "Diario" : "Semanal")} · Mes: {completed}/{scheduledDates.length} cumplidos</small></div><div className="habit-actions"><b className={`percentage ${tone}`}>{percent}%</b><button className="text-button" onClick={() => setHabitForm({ id: habit.id, title: habit.title, detail: habit.detail ?? "", projectId: habit.projectId ?? "", frequency: habit.frequency, scheduledDays: habit.scheduledDays })}>Editar</button><button className="danger-link text-button" onClick={() => void archiveHabit(habit)} disabled={isSaving}>Archivar</button></div></div>{habit.frequency === "SEMANAL" && <small className="habit-frequency">{habit.scheduledDays.map((day) => weekdaysShort[day]).join(" · ")}</small>}<div className="habit-calendar-heading"><strong>Registro de {months[view.month].toLowerCase()}</strong><span>Verde: cumplido · gris: no disponible</span></div><div className="habit-days">{Array.from({ length: daysInMonth }, (_, index) => { const day = index + 1; const date = isoDate(view.year, view.month, day); const scheduled = isHabitScheduled(habit, date); const beforeStart = date < habit.startedAt; const future = date > selectedDate; const unavailable = !scheduled || future; const reason = beforeStart ? "El hábito aún no iniciaba" : future ? "Aún no llega este día" : !scheduled ? "No está programado" : "Marcar como cumplido"; return <button key={day} onClick={() => void toggleHabit(habit, day)} disabled={isSaving || unavailable} className={`${habit.completedDates.includes(date) ? "done" : ""} ${!scheduled ? "not-scheduled" : ""} ${beforeStart ? "before-start" : ""} ${future ? "future" : ""}`} aria-label={`${habit.title}, día ${day}: ${reason}`} title={reason}>{day}</button>; })}</div></article>;
+        })}{!!dashboard?.archivedHabits.length && <details className="archive-list"><summary>Hábitos archivados ({dashboard.archivedHabits.length})</summary>{dashboard.archivedHabits.map((habit) => <div key={habit.id}><span><b>{habit.title}</b><small>{habit.detail ?? "Sin detalle"}</small></span><button className="text-button" onClick={() => void restoreHabit(habit)} disabled={isSaving}>Reactivar</button></div>)}</details>}{!dashboard && <p className="empty-state">Cargando hábitos…</p>}</div>}
       </section>
 
       <section className="block">
@@ -446,6 +529,7 @@ export default function Home() {
     <section className="calendar-area">
       <header className="calendar-header"><button className="today" onClick={goToToday}>Hoy</button><div className="month-nav"><button onClick={() => changeMonth(-1)} aria-label="Mes anterior">‹</button><button onClick={() => changeMonth(1)} aria-label="Mes siguiente">›</button></div><h2>{months[view.month]} {view.year}</h2><div className="view-switch"><button className="active">Mes</button></div></header>
       <form className="event-composer" onSubmit={addEvent}><span>Evento para el {selectedDay}</span><input value={newEvent} onChange={(event) => setNewEvent(event.target.value)} placeholder="Agregar evento…" maxLength={140} aria-label="Nuevo evento" /><select value={newEventProject} onChange={(event) => setNewEventProject(event.target.value)} aria-label="Proyecto del evento"><option value="">Sin proyecto</option>{(dashboard?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select><button disabled={!newEvent.trim() || isSaving}>Agregar</button></form>
+      {!!selectedEvents.length && <div className="selected-events" aria-label="Eventos del día seleccionado"><span>Eventos del día</span>{selectedEvents.map((event) => <button type="button" key={event.id} onClick={() => setEventForm({ id: event.id, title: event.title, date: event.date, projectId: event.projectId ?? "" })}>{event.title}{event.project ? ` · ${event.project}` : ""}</button>)}</div>}
       <div className="calendar-weekdays">{weekdays.map((day, index) => <div key={day} className={index === 0 || index === 6 ? "weekend-label" : ""}>{day}</div>)}</div>
       <div className="calendar-grid">{calendarCells.map((cell, index) => {
         const cellMonth = cell.month < 0 ? 11 : cell.month > 11 ? 0 : cell.month;
@@ -454,7 +538,7 @@ export default function Home() {
         const selected = cell.current && cell.day === selectedDay;
         const events = cell.current ? eventsByDate.get(key) ?? [] : [];
         const weekend = index % 7 === 0 || index % 7 === 6;
-        return <button key={`${key}-${index}`} className={`calendar-cell ${!cell.current ? "outside" : ""} ${weekend ? "weekend" : ""} ${selected ? "selected" : ""}`} onClick={() => cell.current && setSelectedDay(cell.day)}><span className="date-number">{cell.day}</span>{cell.current && (habitDates.has(key) || actionDates.has(key) || noteDates.has(key)) && <div className="cell-status">{habitDates.has(key) && <span className="mini green" title="Hábitos cumplidos" />}{actionDates.has(key) && <span className="mini blue" title="Acciones programadas" />}{noteDates.has(key) && <span className="mini violet" title="Notas" />}</div>}<div className="events">{events.map((event) => <span key={event}>{event}</span>)}</div>{selected && <span className="cell-summary">{pendingCount} acciones · {(dashboard?.habits ?? []).length} hábitos</span>}</button>;
+        return <button key={`${key}-${index}`} className={`calendar-cell ${!cell.current ? "outside" : ""} ${weekend ? "weekend" : ""} ${selected ? "selected" : ""}`} onClick={() => cell.current && setSelectedDay(cell.day)}><span className="date-number">{cell.day}</span>{cell.current && (habitDates.has(key) || actionDates.has(key) || noteDates.has(key)) && <div className="cell-status">{habitDates.has(key) && <span className="mini green" title="Hábitos cumplidos" />}{actionDates.has(key) && <span className="mini blue" title="Acciones programadas" />}{noteDates.has(key) && <span className="mini violet" title="Notas" />}</div>}<div className="events">{events.slice(0, 2).map((event) => <span key={event.id}>{event.title}</span>)}{events.length > 2 && <span className="event-overflow">+{events.length - 2} más</span>}</div></button>;
       })}</div>
     </section>
 
@@ -493,6 +577,15 @@ export default function Home() {
       <label>Nueva fecha<input type="date" value={rescheduleForm.date} min={offsetDateKey(rescheduleForm.action.scheduledDate, 1)} onChange={(event) => setRescheduleForm({ ...rescheduleForm, date: event.target.value })} required /></label>
       <label>Motivo <span>(opcional)</span><input value={rescheduleForm.reason} onChange={(event) => setRescheduleForm({ ...rescheduleForm, reason: event.target.value })} maxLength={200} placeholder="Ej. prioridad inesperada" /></label>
       <footer><button type="button" className="secondary-button" onClick={() => setRescheduleForm(null)}>Cancelar</button><button disabled={isSaving}>Reprogramar</button></footer>
+    </form></Modal>}
+
+    {historyAction && <Modal title="Historial de reprogramaciones" onClose={() => setHistoryAction(null)}><div className="reschedule-history"><p className="modal-note">{historyAction.title}</p>{historyAction.reschedules.map((item) => <article key={`${item.fromDate}-${item.createdAt}`}><b>{item.fromDate} → {item.toDate}</b><small>{new Date(item.createdAt).toLocaleDateString("es-MX")}</small>{item.reason && <p>{item.reason}</p>}</article>)}</div></Modal>}
+
+    {eventForm && <Modal title="Editar evento" onClose={() => setEventForm(null)}><form className="editor-form" onSubmit={saveEventDetails}>
+      <label>Evento<input value={eventForm.title} onChange={(event) => setEventForm({ ...eventForm, title: event.target.value })} maxLength={140} autoFocus required /></label>
+      <label>Fecha<input type="date" value={eventForm.date} onChange={(event) => setEventForm({ ...eventForm, date: event.target.value })} required /></label>
+      <label>Proyecto <span>(opcional)</span><select value={eventForm.projectId} onChange={(event) => setEventForm({ ...eventForm, projectId: event.target.value })}><option value="">Sin proyecto</option>{(dashboard?.projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+      <footer><button type="button" className="danger-button" onClick={() => void deleteEvent()} disabled={isSaving}>Eliminar</button><button type="button" className="secondary-button" onClick={() => setEventForm(null)}>Cancelar</button><button disabled={isSaving}>Guardar evento</button></footer>
     </form></Modal>}
 
     {habitForm && <Modal title={habitForm.id ? "Editar hábito" : "Nuevo hábito"} onClose={() => setHabitForm(null)}><form className="editor-form" onSubmit={saveHabit}>

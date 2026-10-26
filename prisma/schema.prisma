@@ -60,6 +60,7 @@ model User {
   id                 String              @id @default(cuid())
   email              String              @unique
   name               String?
+  passwordHash       String?
   projects           Project[]
   goals              Goal[]
   actions            Action[]
@@ -67,6 +68,7 @@ model User {
   habits             Habit[]
   habitEntries       HabitEntry[]
   dailyCheckIns      DailyCheckIn[]
+  healthMetrics      HealthMetric[]
   notes              Note[]
   monthlyReflections MonthlyReflection[]
   createdAt          DateTime            @default(now())
@@ -191,12 +193,29 @@ model Habit {
   active        Boolean        @default(true)
   startedAt     DateTime       @default(now()) @db.Date
   archivedAt    DateTime?      @db.Date
+  lastUnlockedAt DateTime?     @db.Date
   entries       HabitEntry[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
   @@index([userId, active])
   @@index([projectId])
+}
+
+model HealthMetric {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date         DateTime @db.Date
+  steps        Int?
+  sleepHours   Float?
+  workoutDone  Boolean  @default(false)
+  readingPages Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
 }
 
 model HabitEntry {

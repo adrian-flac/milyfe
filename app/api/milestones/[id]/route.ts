@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { dayFromKey, getLocalUser } from "../../../../lib/life-data";
+import { dayFromKey } from "../../../../lib/life-data";
+import { getCurrentUser } from "../../../../lib/current-user";
 import { prisma } from "../../../../lib/prisma";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -13,7 +14,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (completed !== undefined && typeof completed !== "boolean") throw new Error("Estado inválido.");
     if (goalId !== undefined && goalId !== null && typeof goalId !== "string") throw new Error("Objetivo inválido.");
 
-    const user = await getLocalUser();
+    const user = await getCurrentUser();
     const milestone = await prisma.milestone.findFirst({ where: { id, project: { userId: user.id } } });
     if (!milestone) return NextResponse.json({ error: "Hito no encontrado." }, { status: 404 });
     const safeGoalId = typeof goalId === "string" && goalId ? goalId : null;
