@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { apiErrorResponse, RequestValidationError } from "../../../lib/api-error";
 import { dayFromKey } from "../../../lib/life-data";
 import { getCurrentUser } from "../../../lib/current-user";
-import { prisma } from "../../../lib/prisma";
+import { runSerializableTransaction } from "../../../lib/serializable-transaction";
 
 const actionTypes = ["CLAVE", "DECISION"] as const;
 
@@ -18,24 +18,28 @@ export async function POST(request: Request) {
 
     const user = await getCurrentUser();
     const scheduledDate = dayFromKey(date);
-    const existing = await prisma.action.count({ where: { userId: user.id, scheduledDate } });
-    if (existing >= 6) throw new RequestValidationError("Solo puedes tener seis acciones para este día.");
+    const actionTitle = title.trim();
 
-    const safeProjectId = typeof projectId === "string" && projectId ? projectId : null;
-    if (safeProjectId) {
-      const project = await prisma.project.findFirst({ where: { id: safeProjectId, userId: user.id } });
-      if (!project) throw new RequestValidationError("Proyecto inválido.");
-    }
+    await runSerializableTransaction(async (tx) => {
+      const existing = await tx.action.count({ where: { userId: user.id, scheduledDate } });
+      if (existing >= 6) throw new RequestValidationError("Solo puedes tener seis acciones para este día.");
 
-    await prisma.action.create({
-      data: {
-        userId: user.id,
-        projectId: safeProjectId,
-        title: title.trim(),
-        type: type as (typeof actionTypes)[number],
-        scheduledDate,
-        sortOrder: existing + 1,
-      },
+      const safeProjectId = typeof projectId === "string" && projectId ? projectId : null;
+      if (safeProjectId) {
+        const project = await tx.project.findFirst({ where: { id: safeProjectId, userId: user.id } });
+        if (!project) throw new RequestValidationError("Proyecto inválido.");
+      }
+
+      await tx.action.create({
+        data: {
+          userId: user.id,
+          projectId: safeProjectId,
+          title: actionTitle,
+          type: type as (typeof actionTypes)[number],
+          scheduledDate,
+          sortOrder: existing + 1,
+        },
+      });
     });
 
     return NextResponse.json({ ok: true }, { status: 201 });

@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { getPasswordPolicyError } = require("../.test-build/password-policy.js");
-const { getMutationRequestError } = require("../.test-build/request-security.js");
+const { getMutationRequestError, safeCallbackPath } = require("../.test-build/request-security.js");
 
 test("la política acepta contraseñas robustas y bloquea las débiles o ligadas al correo", () => {
   assert.equal(getPasswordPolicyError("Mi frase segura 2026!", "adrian@example.com"), null);
@@ -33,4 +33,11 @@ test("las mutaciones solo aceptan el origen propio y JSON acotado", () => {
     headers: { origin: "https://milyfe.example", "content-type": "application/json", "content-length": "32769" },
   });
   assert.equal(getMutationRequestError(tooLarge)?.status, 413);
+});
+
+test("el destino después del acceso solo puede ser una ruta interna", () => {
+  assert.equal(safeCallbackPath("/?day=2026-11-08#agenda"), "/?day=2026-11-08#agenda");
+  for (const path of [null, "javascript:alert(1)", "https://other.example", "//other.example", "/\\other.example", "/\t/other.example", "/.//other.example"]) {
+    assert.equal(safeCallbackPath(path), "/");
+  }
 });

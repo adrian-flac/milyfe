@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { apiErrorResponse, RequestValidationError } from "../../../../lib/api-error";
 import { dayFromKey, dayKey } from "../../../../lib/life-data";
 import { getCurrentUser } from "../../../../lib/current-user";
-import { prisma } from "../../../../lib/prisma";
+import { runSerializableTransaction } from "../../../../lib/serializable-transaction";
 
 const statuses = ["PENDIENTE", "COMPLETADA", "POSPUESTA"] as const;
 const types = ["CLAVE", "DECISION"] as const;
@@ -20,26 +20,26 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (reason !== undefined && (typeof reason !== "string" || reason.length > 200)) throw new RequestValidationError("El motivo no puede exceder 200 caracteres.");
 
     const user = await getCurrentUser();
-    const action = await prisma.action.findFirst({ where: { id, userId: user.id } });
-    if (!action) return NextResponse.json({ error: "Acción no encontrada." }, { status: 404 });
+    const updated = await runSerializableTransaction(async (tx) => {
+      const action = await tx.action.findFirst({ where: { id, userId: user.id } });
+      if (!action) return false;
 
-    let safeProjectId: string | null | undefined;
-    if (projectId !== undefined) {
-      safeProjectId = typeof projectId === "string" && projectId ? projectId : null;
-      if (safeProjectId) {
-        const project = await prisma.project.findFirst({ where: { id: safeProjectId, userId: user.id, status: "ACTIVO" } });
-        if (!project) throw new RequestValidationError("Proyecto inválido o archivado.");
+      let safeProjectId: string | null | undefined;
+      if (projectId !== undefined) {
+        safeProjectId = typeof projectId === "string" && projectId ? projectId : null;
+        if (safeProjectId) {
+          const project = await tx.project.findFirst({ where: { id: safeProjectId, userId: user.id, status: "ACTIVO" } });
+          if (!project) throw new RequestValidationError("Proyecto inválido o archivado.");
+        }
       }
-    }
 
-    const nextDate = date === undefined ? action.scheduledDate : dayFromKey(date as string);
-    const didReschedule = dayKey(nextDate) !== dayKey(action.scheduledDate);
-    if (didReschedule) {
-      const count = await prisma.action.count({ where: { userId: user.id, scheduledDate: nextDate, id: { not: id } } });
-      if (count >= 6) throw new RequestValidationError("El nuevo día ya tiene seis acciones.");
-    }
+      const nextDate = date === undefined ? action.scheduledDate : dayFromKey(date as string);
+      const didReschedule = dayKey(nextDate) !== dayKey(action.scheduledDate);
+      if (didReschedule) {
+        const count = await tx.action.count({ where: { userId: user.id, scheduledDate: nextDate, id: { not: id } } });
+        if (count >= 6) throw new RequestValidationError("El nuevo día ya tiene seis acciones.");
+      }
 
-    await prisma.$transaction(async (tx) => {
       if (didReschedule) {
         await tx.actionReschedule.create({
           data: { actionId: id, fromDate: action.scheduledDate, toDate: nextDate, reason: typeof reason === "string" ? reason.trim() || null : null },
@@ -55,8 +55,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           ...(status !== undefined && !didReschedule ? { status: status as (typeof statuses)[number], completedAt: status === "COMPLETADA" ? new Date() : null } : {}),
         },
       });
+      return true;
     });
 
+    if (!updated) return NextResponse.json({ error: "Acción no encontrada." }, { status: 404 });
     return NextResponse.json({ ok: true });
   } catch (error) {
     return apiErrorResponse(error, "No se pudo actualizar la acción.");

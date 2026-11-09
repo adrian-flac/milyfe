@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiErrorResponse, RequestValidationError } from "../../../lib/api-error";
-import { addUtcMonths, dayFromKey, dayKey } from "../../../lib/dates";
-import { canUnlockHabitSlot, lastCompletedMonthStart } from "../../../lib/habit-progress";
+import { findHabitUnlock } from "../../../lib/habit-capacity";
 import { getCurrentUser } from "../../../lib/current-user";
-import { prisma } from "../../../lib/prisma";
+import { runSerializableTransaction } from "../../../lib/serializable-transaction";
 
 const frequencies = ["DIARIA", "SEMANAL"] as const;
 
@@ -19,33 +18,22 @@ function readHabitInput(body: Record<string, unknown>) {
   return { title: title.trim(), detail: typeof detail === "string" && detail.trim() ? detail.trim() : null, projectId: typeof projectId === "string" && projectId ? projectId : null, frequency: frequency as (typeof frequencies)[number], scheduledDays: days };
 }
 
-async function findHabitUnlock(userId: string) {
-  const today = dayFromKey(dayKey(new Date()));
-  const currentMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1, 12));
-  const habits = await prisma.habit.findMany({
-    where: { userId, active: true },
-    include: { entries: { where: { completed: true, date: { gte: addUtcMonths(currentMonth, -24) } }, select: { date: true, completed: true } } },
-  });
-  if (habits.length < 3) return null;
-  if (habits.length >= 4) throw new RequestValidationError("Ya tienes el máximo de 4 hábitos activos.");
-  const habit = habits.find((item) => canUnlockHabitSlot(item, item.entries, today, item.lastUnlockedAt));
-  if (!habit) throw new RequestValidationError("Completa tres meses consecutivos en verde para desbloquear un cuarto hábito.");
-  return { habitId: habit.id, unlockedAt: lastCompletedMonthStart(today) };
-}
-
 export async function POST(request: Request) {
   try {
     const body: unknown = await request.json();
     if (!body || typeof body !== "object") throw new RequestValidationError("Solicitud inválida.");
     const input = readHabitInput(body as Record<string, unknown>);
     const user = await getCurrentUser();
-    const unlock = await findHabitUnlock(user.id);
-    if (input.projectId) {
-      const project = await prisma.project.findFirst({ where: { id: input.projectId, userId: user.id, status: "ACTIVO" } });
-      if (!project) throw new RequestValidationError("Proyecto inválido.");
-    }
-    const habit = await prisma.habit.create({ data: { userId: user.id, ...input } });
-    if (unlock) await prisma.habit.update({ where: { id: unlock.habitId }, data: { lastUnlockedAt: unlock.unlockedAt } });
+    const habit = await runSerializableTransaction(async (tx) => {
+      const unlock = await findHabitUnlock(tx, user.id);
+      if (input.projectId) {
+        const project = await tx.project.findFirst({ where: { id: input.projectId, userId: user.id, status: "ACTIVO" } });
+        if (!project) throw new RequestValidationError("Proyecto inválido.");
+      }
+      const habit = await tx.habit.create({ data: { userId: user.id, ...input } });
+      if (unlock) await tx.habit.update({ where: { id: unlock.habitId }, data: { lastUnlockedAt: unlock.unlockedAt } });
+      return habit;
+    });
     return NextResponse.json({ habit }, { status: 201 });
   } catch (error) {
     return apiErrorResponse(error, "No se pudo crear el hábito.");

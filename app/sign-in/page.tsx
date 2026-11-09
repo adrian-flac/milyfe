@@ -3,6 +3,7 @@
 import { FormEvent, Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { safeCallbackPath } from "../../lib/request-security";
 
 type Mode = "sign-in" | "register";
 
@@ -16,8 +17,7 @@ function SignInForm() {
   const [bootstrapToken, setBootstrapToken] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const requestedPath = searchParams.get("callbackUrl");
-  const callbackUrl = requestedPath?.startsWith("/") ? requestedPath : "/";
+  const callbackUrl = safeCallbackPath(searchParams.get("callbackUrl"));
   const passwordChanged = searchParams.get("passwordChanged") === "1";
 
   async function submit(event: FormEvent<HTMLFormElement>) {

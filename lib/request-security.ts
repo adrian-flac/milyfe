@@ -56,3 +56,15 @@ export function getMutationRequestError(request: RequestLike): MutationRequestEr
 
   return null;
 }
+
+export function safeCallbackPath(value: string | null) {
+  if (!value?.startsWith("/")) return "/";
+  const base = "https://milyfe.invalid";
+  try {
+    const target = new URL(value, base);
+    if (target.origin !== base || target.pathname.startsWith("//")) return "/";
+    return target.pathname + target.search + target.hash;
+  } catch {
+    return "/";
+  }
+}

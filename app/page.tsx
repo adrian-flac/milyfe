@@ -75,11 +75,17 @@ function domainLabel(domain: Project["domain"]) {
   return domain === "SALUD" ? "Salud" : domain === "TRABAJO" ? "Trabajo" : "Personal";
 }
 
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 async function api(path: string, options?: RequestInit) {
   const response = await fetch(path, { ...options, headers: { "Content-Type": "application/json", ...options?.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(body?.error ?? "No se pudo guardar el cambio.");
+    throw new ApiError(body?.error ?? "No se pudo guardar el cambio.", response.status);
   }
   return response.json();
 }
@@ -89,7 +95,9 @@ export default function Home() {
   const initialToday = new Date();
   const [view, setView] = useState(() => ({ year: initialToday.getFullYear(), month: initialToday.getMonth() }));
   const [selectedDay, setSelectedDay] = useState(() => initialToday.getDate());
-  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [loadedDashboard, setLoadedDashboard] = useState<{ date: string; data: Dashboard } | null>(null);
+  const dashboardDate = useRef<string | null>(null);
+  const dashboardRequest = useRef<AbortController | null>(null);
   const [newAction, setNewAction] = useState("");
   const [newActionKind, setNewActionKind] = useState<ActionKind>("CLAVE");
   const [newActionProject, setNewActionProject] = useState("");
@@ -115,16 +123,38 @@ export default function Home() {
   const [learningDraft, setLearningDraft] = useState("");
   const selectedDate = isoDate(view.year, view.month, selectedDay);
 
+  const dashboard = loadedDashboard?.date === selectedDate ? loadedDashboard.data : null;
+
   const loadDashboard = useCallback(async () => {
+    const date = dashboardDate.current;
+    if (!date) return;
+
+    dashboardRequest.current?.abort();
+    const controller = new AbortController();
+    dashboardRequest.current = controller;
+    setSyncError("");
+
     try {
-      setSyncError("");
-      setDashboard(await api(`/api/dashboard?date=${selectedDate}`) as Dashboard);
+      const data = await api(`/api/dashboard?date=${date}`, { signal: controller.signal }) as Dashboard;
+      if (!controller.signal.aborted) setLoadedDashboard({ date, data });
     } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof ApiError && error.status === 401) {
+        window.location.replace("/sign-in");
+        return;
+      }
       setSyncError(error instanceof Error ? error.message : "No se pudo cargar tu información.");
     }
-  }, [selectedDate]);
+  }, []);
 
-  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  useEffect(() => {
+    dashboardDate.current = selectedDate;
+    void loadDashboard();
+    return () => {
+      dashboardDate.current = null;
+      dashboardRequest.current?.abort();
+    };
+  }, [selectedDate, loadDashboard]);
   useEffect(() => {
     setCheckInNote(dashboard?.checkIn?.note ?? "");
     setLearningDraft(dashboard?.monthlyReview.learning ?? "");

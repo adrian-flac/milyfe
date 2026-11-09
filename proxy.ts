@@ -20,9 +20,8 @@ export default auth((request) => {
   }
 
   if (pathname === "/api/register") return NextResponse.next();
-  if (publicPaths.has(pathname)) {
-    return isAuthenticated ? NextResponse.redirect(new URL("/", request.url)) : NextResponse.next();
-  }
+  // A revoked JWT may still be present. Allow the user to sign in again.
+  if (publicPaths.has(pathname)) return NextResponse.next();
   if (isAuthenticated) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
